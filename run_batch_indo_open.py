@@ -11,6 +11,12 @@ import sys
 import time
 from datetime import datetime
 
+# Re-exec under the project venv (which has patchright) so child instances
+# spawned via sys.executable inherit the correct interpreter.
+_VENV_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv", "bin", "python")
+if os.path.exists(_VENV_PY) and os.path.realpath(sys.executable) != os.path.realpath(_VENV_PY):
+    os.execv(_VENV_PY, [_VENV_PY, os.path.abspath(__file__)] + sys.argv[1:])
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.join(SCRIPT_DIR, "results_indo_open")
 

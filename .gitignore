@@ -12,4 +12,5 @@ results/
 results_indo_open/
 quiz_log*.txt
 *.png
+*.log
 test_run_cookies.json

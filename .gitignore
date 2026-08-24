@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.venv312/
+
+# Secrets (2captcha / cfmail / mxroute keys)
+.secret
+
+# Runtime artifacts & output
+results/
+results_indo_open/
+quiz_log*.txt
+*.png
+test_run_cookies.json

@@ -11,6 +11,7 @@ import json
 import os
 import random
 import string
+import sys
 import time
 import urllib.request
 import urllib.error
@@ -78,6 +79,16 @@ async def wait_for_result(page, timeout_ms=60000):
             return True
         await page.wait_for_timeout(1000)
     return False
+
+async def save_error_screenshot(page, name, tag):
+    """Write a diagnostic screenshot for a run that failed before Step 7."""
+    try:
+        safe = name.replace("@", "_at_").replace(".", "_")
+        path = os.path.join(OUTPUT_DIR, f"{safe}_{tag}.png")
+        await page.screenshot(path=path, full_page=True)
+        log(f"[diag] {tag} screenshot saved: {path}")
+    except Exception as e:
+        log(f"[diag] {tag} screenshot failed: {e}")
 
 def random_name():
     first_names = [
@@ -462,6 +473,7 @@ async def run_once(browser, run_num):
         test_email, cfmail_session = create_cfmail_email(test_name)
         if not test_email:
             log(f"[Step 3] ERROR: Failed to create cfmail email, skipping run")
+            await save_error_screenshot(page, test_name, "step3_noemail")
             return False
         test_phone = random_phone()
         log(f"[Step 3] Generated data:")
@@ -538,9 +550,19 @@ async def run_once(browser, run_num):
 
         # Step 4: Submit entry directly to the backend (bypasses the React-gated button)
         log(f"[Step 4] Posting entry directly to /api/c/indonesiaopen/enter...")
-        result = await submit_entry(page, token)
+        result = None
+        for attempt in range(1, 4):
+            log(f"[Step 4] Attempt {attempt}/3...")
+            if attempt > 1:
+                token = solve_turnstile()
+            result = await submit_entry(page, token)
+            if result.get("ok"):
+                break
+            log(f"[Step 4] Attempt {attempt} rejected: {result}")
+            await page.wait_for_timeout(2000)
         if not result.get("ok"):
-            log(f"[Step 4] ERROR: entry rejected: {result}")
+            log(f"[Step 4] ERROR: entry rejected after retries: {result}")
+            await save_error_screenshot(page, test_email, "step4_rejected")
             return False
         log(f"[Step 4] Entry accepted. Reloading page to enter quiz state...")
         await page.reload(wait_until="networkidle", timeout=30000)
@@ -565,11 +587,25 @@ async def run_once(browser, run_num):
             if await answer_probe.count() > 0:
                 log(f"[Step 5] No 'Mulai Kerjakan Soal' button, but quiz is already showing questions -> proceeding.")
             else:
-                log(f"[Step 5] ERROR: No 'Mulai Kerjakan Soal' button found!")
-                # Debug: dump page text
-                page_text = await page.inner_text("body")
-                log(f"[Step 5] Page text (first 500 chars): {page_text[:500]}")
-                return False
+                # Retry: reload once and wait longer before giving up.
+                log(f"[Step 5] No quiz buttons found. Reloading page and retrying...")
+                await page.reload(wait_until="networkidle", timeout=30000)
+                await page.wait_for_timeout(3000)
+                mulai_btn_retry = page.locator("button:has-text('Mulai Kerjakan Soal')")
+                answer_probe_retry = page.locator("button:has-text('A'), button:has-text('B'), button:has-text('C'), button:has-text('D')")
+                if await mulai_btn_retry.count() > 0:
+                    await mulai_btn_retry.click()
+                    await page.wait_for_selector("button:has-text('A')", timeout=10000)
+                    await page.wait_for_timeout(1000)
+                    log(f"[Step 5] Quiz loaded after retry!")
+                elif await answer_probe_retry.count() > 0:
+                    log(f"[Step 5] Quiz showing questions after retry -> proceeding.")
+                else:
+                    log(f"[Step 5] ERROR: No 'Mulai Kerjakan Soal' button found!")
+                    page_text = await page.inner_text("body")
+                    log(f"[Step 5] Page text (first 500 chars): {page_text[:500]}")
+                    await save_error_screenshot(page, test_email, "step5_nobutton")
+                    return False
 
         # Step 6: Answer quiz
         log(f"[Step 6] Starting quiz...")
@@ -744,5 +780,7 @@ async def main():
     log(f"  Log file: {LOG_FILE}")
     log(f"{'='*60}")
 
+    return 0 if success == TOTAL_RUNS else 1
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))

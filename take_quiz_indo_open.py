@@ -734,7 +734,7 @@ async def main():
         log(f"Launching stealth browser (bypass Cloudflare)...")
         log(f"[Step 1] Launching browser with stealth mode...")
         browser = await p.chromium.launch(
-            headless=False,  # headless=False required to bypass Cloudflare Turnstile
+            headless=True,
             channel="chrome",  # use real Google Chrome, not "Chrome for Testing"
             args=STEALTH_ARGS + [
                 "--no-sandbox",

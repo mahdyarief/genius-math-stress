@@ -693,8 +693,11 @@ async def run_once(browser, run_num):
             log(f"[Step 7]   | {line}")
 
         screenshot_path = os.path.join(OUTPUT_DIR, f"{test_email}.png")
-        await page.screenshot(path=screenshot_path, full_page=True)
-        log(f"[Step 7] Screenshot saved: {screenshot_path}")
+        try:
+            await page.screenshot(path=screenshot_path, full_page=True)
+            log(f"[Step 7] Screenshot saved: {screenshot_path}")
+        except Exception as e:
+            log(f"[Step 7] Screenshot failed (run still complete): {e}")
 
         # Log identity info
         log(f"[Step 7] Looking for identity data on page...")
@@ -711,7 +714,18 @@ async def run_once(browser, run_num):
 
     except Exception as e:
         log(f"[ERROR] Run #{run_num} exception: {e}")
-        # Take error screenshot
+        # If the result page is already showing, the run actually succeeded —
+        # capture it as a normal screenshot instead of labeling it an error.
+        try:
+            body = await page.inner_text("body")
+            if "Kamu Sudah Selesai" in body or "TINGKAT KEJENIUSAN" in body or "Hasil Kamu" in body:
+                ss_path = os.path.join(OUTPUT_DIR, f"{test_email}.png")
+                await page.screenshot(path=ss_path, full_page=True)
+                log(f"[ERROR] Result page detected after exception; saved as normal screenshot: {ss_path}")
+                return True
+        except Exception:
+            pass
+        # Otherwise write a diagnostic error screenshot.
         try:
             err_dir = os.path.join(OUTPUT_DIR, "errors")
             os.makedirs(err_dir, exist_ok=True)

@@ -83,8 +83,10 @@ async def wait_for_result(page, timeout_ms=60000):
 async def save_error_screenshot(page, name, tag):
     """Write a diagnostic screenshot for a run that failed before Step 7."""
     try:
+        err_dir = os.path.join(OUTPUT_DIR, "errors")
+        os.makedirs(err_dir, exist_ok=True)
         safe = name.replace("@", "_at_").replace(".", "_")
-        path = os.path.join(OUTPUT_DIR, f"{safe}_{tag}.png")
+        path = os.path.join(err_dir, f"{safe}_{tag}.png")
         await page.screenshot(path=path, full_page=True)
         log(f"[diag] {tag} screenshot saved: {path}")
     except Exception as e:
@@ -711,7 +713,9 @@ async def run_once(browser, run_num):
         log(f"[ERROR] Run #{run_num} exception: {e}")
         # Take error screenshot
         try:
-            err_ss = os.path.join(OUTPUT_DIR, f"{test_email}_error.png")
+            err_dir = os.path.join(OUTPUT_DIR, "errors")
+            os.makedirs(err_dir, exist_ok=True)
+            err_ss = os.path.join(err_dir, f"{test_email}_error.png")
             await page.screenshot(path=err_ss, full_page=True)
             log(f"[ERROR] Error screenshot saved: {err_ss}")
         except:

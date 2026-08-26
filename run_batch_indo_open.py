@@ -13,8 +13,13 @@ from datetime import datetime
 
 # Re-exec under the project venv (which has patchright) so child instances
 # spawned via sys.executable inherit the correct interpreter.
-_VENV_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv", "bin", "python")
+_BASE = os.path.dirname(os.path.abspath(__file__))
+_VENV_PY = os.path.join(_BASE, ".venv", "Scripts", "python.exe") if os.name == "nt" else os.path.join(_BASE, ".venv", "bin", "python")
 if os.path.exists(_VENV_PY) and os.path.realpath(sys.executable) != os.path.realpath(_VENV_PY):
+    if os.name == "nt":
+        # os.execv is unavailable on Windows; re-launch as a child process.
+        import subprocess
+        raise SystemExit(subprocess.call([_VENV_PY, os.path.abspath(__file__)] + sys.argv[1:]))
     os.execv(_VENV_PY, [_VENV_PY, os.path.abspath(__file__)] + sys.argv[1:])
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))

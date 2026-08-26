@@ -564,7 +564,7 @@ async def run_once(browser, run_num):
             await page.wait_for_timeout(2000)
         if not result.get("ok"):
             log(f"[Step 4] ERROR: entry rejected after retries: {result}")
-            await save_error_screenshot(page, test_email, "step4_rejected")
+            await save_error_screenshot(page, test_name, "step4_rejected")
             return False
         log(f"[Step 4] Entry accepted. Reloading page to enter quiz state...")
         await page.reload(wait_until="networkidle", timeout=30000)
@@ -606,7 +606,7 @@ async def run_once(browser, run_num):
                     log(f"[Step 5] ERROR: No 'Mulai Kerjakan Soal' button found!")
                     page_text = await page.inner_text("body")
                     log(f"[Step 5] Page text (first 500 chars): {page_text[:500]}")
-                    await save_error_screenshot(page, test_email, "step5_nobutton")
+                    await save_error_screenshot(page, test_name, "step5_nobutton")
                     return False
 
         # Step 6: Answer quiz
@@ -692,7 +692,7 @@ async def run_once(browser, run_num):
         for line in visible_lines[:10]:
             log(f"[Step 7]   | {line}")
 
-        screenshot_path = os.path.join(OUTPUT_DIR, f"{test_email}.png")
+        screenshot_path = os.path.join(OUTPUT_DIR, f"{test_name}.png")
         try:
             await page.screenshot(path=screenshot_path, full_page=True)
             log(f"[Step 7] Screenshot saved: {screenshot_path}")
@@ -719,7 +719,7 @@ async def run_once(browser, run_num):
         try:
             body = await page.inner_text("body")
             if "Kamu Sudah Selesai" in body or "TINGKAT KEJENIUSAN" in body or "Hasil Kamu" in body:
-                ss_path = os.path.join(OUTPUT_DIR, f"{test_email}.png")
+                ss_path = os.path.join(OUTPUT_DIR, f"{test_name}.png")
                 await page.screenshot(path=ss_path, full_page=True)
                 log(f"[ERROR] Result page detected after exception; saved as normal screenshot: {ss_path}")
                 return True
@@ -729,7 +729,7 @@ async def run_once(browser, run_num):
         try:
             err_dir = os.path.join(OUTPUT_DIR, "errors")
             os.makedirs(err_dir, exist_ok=True)
-            err_ss = os.path.join(err_dir, f"{test_email}_error.png")
+            err_ss = os.path.join(err_dir, f"{test_name}_error.png")
             await page.screenshot(path=err_ss, full_page=True)
             log(f"[ERROR] Error screenshot saved: {err_ss}")
         except:

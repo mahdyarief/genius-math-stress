@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import random
+import re
 import string
 import sys
 import time
@@ -474,6 +475,121 @@ async def submit_entry(page, token):
         return {"ok": False, "status": 0, "body": {"error": str(e)}}
 
 
+async def start_quiz(page, test_username):
+    """Start the quiz — click 'Mulai Kerjakan Soal' or detect in-progress questions."""
+    log(f"[Quiz] Looking for 'Mulai Kerjakan Soal' button...")
+    mulai_btn = page.locator("button:has-text('Mulai Kerjakan Soal')")
+    if await mulai_btn.count() > 0:
+        log(f"[Quiz] Found 'Mulai Kerjakan Soal' -> Clicking...")
+        await mulai_btn.click()
+        log(f"[Quiz] Waiting for answer buttons to appear...")
+        await page.wait_for_selector("button:has-text('A')", timeout=10000)
+        await page.wait_for_timeout(1000)
+        log(f"[Quiz] Quiz loaded!")
+        return True
+
+    # The quiz may already be showing questions without the instruction screen.
+    answer_probe = page.locator("button:has-text('A'), button:has-text('B'), button:has-text('C'), button:has-text('D')")
+    if await answer_probe.count() > 0:
+        log(f"[Quiz] Quiz is already showing questions -> proceeding.")
+        return True
+
+    # Retry: reload once and wait longer before giving up.
+    log(f"[Quiz] No quiz buttons found. Reloading page and retrying...")
+    await page.reload(wait_until="networkidle", timeout=30000)
+    await page.wait_for_timeout(3000)
+    mulai_btn_retry = page.locator("button:has-text('Mulai Kerjakan Soal')")
+    answer_probe_retry = page.locator("button:has-text('A'), button:has-text('B'), button:has-text('C'), button:has-text('D')")
+    if await mulai_btn_retry.count() > 0:
+        await mulai_btn_retry.click()
+        await page.wait_for_selector("button:has-text('A')", timeout=10000)
+        await page.wait_for_timeout(1000)
+        log(f"[Quiz] Quiz loaded after retry!")
+        return True
+    if await answer_probe_retry.count() > 0:
+        log(f"[Quiz] Quiz showing questions after retry -> proceeding.")
+        return True
+    log(f"[Quiz] ERROR: No 'Mulai Kerjakan Soal' button found!")
+    page_text = await page.inner_text("body")
+    log(f"[Quiz] Page text (first 500 chars): {page_text[:500]}")
+    await save_error_screenshot(page, test_username, "step5_nobutton")
+    return False
+
+
+async def answer_quiz(page):
+    """Answer the quiz questions until 'Selesai' submits and the result page loads."""
+    log(f"[Quiz] Starting quiz...")
+    question_count = 0
+    max_questions = 10
+
+    while question_count < max_questions:
+        log(f"[Quiz] --- Question {question_count + 1} ---")
+        answer_buttons = page.locator("button:has-text('A'), button:has-text('B'), button:has-text('C'), button:has-text('D'), button:has-text('E')")
+        answer_count = await answer_buttons.count()
+        log(f"[Quiz] Found {answer_count} buttons matching A-E pattern")
+
+        if answer_count == 0:
+            log(f"[Quiz] No answer buttons found -> quiz done")
+            break
+
+        # Filter valid answers
+        valid_answers = []
+        for i in range(answer_count):
+            btn_text = await answer_buttons.nth(i).inner_text()
+            if any(btn_text.strip().startswith(letter) for letter in ['A', 'B', 'C', 'D', 'E']):
+                if 'Selanjutnya' not in btn_text and 'Sebelumnya' not in btn_text and 'Selesai' not in btn_text:
+                    valid_answers.append(i)
+                    log(f"[Quiz]   Valid answer button #{i}: '{btn_text[:30]}...'")
+
+        if len(valid_answers) == 0:
+            log(f"[Quiz] No valid answer buttons -> quiz done")
+            break
+
+        # Click random answer
+        answer_idx = random.choice(valid_answers)
+        chosen_text = await answer_buttons.nth(answer_idx).inner_text()
+        log(f"[Quiz] Clicking answer #{answer_idx}: '{chosen_text[:40]}'")
+        await answer_buttons.nth(answer_idx).click()
+        question_count += 1
+
+        # Random human-like delay before next action (2-6 seconds)
+        think_time = random.uniform(2.0, 6.0)
+        log(f"[Quiz] Answered. Thinking for {think_time:.1f}s...")
+        await page.wait_for_timeout(int(think_time * 1000))
+
+        # Check for "Selesai" button
+        selesai_btn = page.locator("button:has-text('Selesai')")
+        if await selesai_btn.count() > 0 and await selesai_btn.is_visible():
+            log(f"[Quiz] Found 'Selesai' button -> Clicking to submit quiz...")
+            await selesai_btn.click()
+            log(f"[Quiz] Clicked 'Selesai'. Waiting for result page...")
+            await wait_for_result(page)
+            log(f"[Quiz] Wait complete.")
+            break
+
+        # Check for "Selanjutnya" button
+        next_btn = page.locator("button:has-text('Selanjutnya')")
+        if await next_btn.count() > 0 and await next_btn.is_visible():
+            log(f"[Quiz] Found 'Selanjutnya' -> Clicking next...")
+            await next_btn.click()
+            log(f"[Quiz] Waiting 1.5s for next question...")
+            await page.wait_for_timeout(1500)
+        else:
+            log(f"[Quiz] No 'Selanjutnya' button found")
+            if await selesai_btn.count() > 0:
+                log(f"[Quiz] But 'Selesai' exists -> Clicking...")
+                await selesai_btn.click()
+                log(f"[Quiz] Clicked 'Selesai'. Waiting for result page...")
+                await wait_for_result(page)
+                log(f"[Quiz] Wait complete.")
+            else:
+                log(f"[Quiz] No 'Selesai' either -> quiz done")
+            break
+
+    log(f"[Quiz] Total questions answered: {question_count}")
+    return question_count
+
+
 async def run_once(browser, run_num):
     log(f"{'='*60}")
     log(f"  RUN #{run_num} START")
@@ -625,115 +741,48 @@ async def run_once(browser, run_num):
         await page.reload(wait_until="networkidle", timeout=30000)
         await page.wait_for_timeout(2000)
 
-        # Step 5: Start quiz
+        # Step 5-6: Play the quiz, then keep clicking "Main Lagi" until all
+        # 3 chances are used up (Kesempatan X dari 3).
         await page.wait_for_timeout(3000)
         log(f"[Step 5] Current URL: {page.url}")
-        log(f"[Step 5] Looking for 'Mulai Kerjakan Soal' button...")
-        mulai_btn = page.locator("button:has-text('Mulai Kerjakan Soal')")
-        if await mulai_btn.count() > 0:
-            log(f"[Step 5] Found 'Mulai Kerjakan Soal' -> Clicking...")
-            await mulai_btn.click()
-            log(f"[Step 5] Waiting for answer buttons to appear...")
-            await page.wait_for_selector("button:has-text('A')", timeout=10000)
-            await page.wait_for_timeout(1000)
-            log(f"[Step 5] Quiz loaded!")
-        else:
-            # The quiz may already be in progress (questions visible) without the
-            # "Mulai Kerjakan Soal" instruction screen. Detect answer buttons directly.
-            answer_probe = page.locator("button:has-text('A'), button:has-text('B'), button:has-text('C'), button:has-text('D')")
-            if await answer_probe.count() > 0:
-                log(f"[Step 5] No 'Mulai Kerjakan Soal' button, but quiz is already showing questions -> proceeding.")
-            else:
-                # Retry: reload once and wait longer before giving up.
-                log(f"[Step 5] No quiz buttons found. Reloading page and retrying...")
-                await page.reload(wait_until="networkidle", timeout=30000)
-                await page.wait_for_timeout(3000)
-                mulai_btn_retry = page.locator("button:has-text('Mulai Kerjakan Soal')")
-                answer_probe_retry = page.locator("button:has-text('A'), button:has-text('B'), button:has-text('C'), button:has-text('D')")
-                if await mulai_btn_retry.count() > 0:
-                    await mulai_btn_retry.click()
-                    await page.wait_for_selector("button:has-text('A')", timeout=10000)
-                    await page.wait_for_timeout(1000)
-                    log(f"[Step 5] Quiz loaded after retry!")
-                elif await answer_probe_retry.count() > 0:
-                    log(f"[Step 5] Quiz showing questions after retry -> proceeding.")
-                else:
-                    log(f"[Step 5] ERROR: No 'Mulai Kerjakan Soal' button found!")
-                    page_text = await page.inner_text("body")
-                    log(f"[Step 5] Page text (first 500 chars): {page_text[:500]}")
-                    await save_error_screenshot(page, test_username, "step5_nobutton")
-                    return False
 
-        # Step 6: Answer quiz
-        log(f"[Step 6] Starting quiz...")
-        question_count = 0
-        max_questions = 10
+        attempt = 0
+        while True:
+            attempt += 1
+            log(f"{'='*60}")
+            log(f"  QUIZ ATTEMPT {attempt}/3")
+            log(f"{'='*60}")
 
-        while question_count < max_questions:
-            log(f"[Step 6] --- Question {question_count + 1} ---")
-            answer_buttons = page.locator("button:has-text('A'), button:has-text('B'), button:has-text('C'), button:has-text('D'), button:has-text('E')")
-            answer_count = await answer_buttons.count()
-            log(f"[Step 6] Found {answer_count} buttons matching A-E pattern")
-
-            if answer_count == 0:
-                log(f"[Step 6] No answer buttons found -> quiz done")
+            if not await start_quiz(page, test_username):
+                log(f"[Quiz] Attempt {attempt} could not start the quiz; stopping replay loop.")
                 break
+            await answer_quiz(page)
 
-            # Filter valid answers
-            valid_answers = []
-            for i in range(answer_count):
-                btn_text = await answer_buttons.nth(i).inner_text()
-                if any(btn_text.strip().startswith(letter) for letter in ['A', 'B', 'C', 'D', 'E']):
-                    if 'Selanjutnya' not in btn_text and 'Sebelumnya' not in btn_text and 'Selesai' not in btn_text:
-                        valid_answers.append(i)
-                        log(f"[Step 6]   Valid answer button #{i}: '{btn_text[:30]}...'")
+            # Read remaining chances from the result page.
+            try:
+                body = await page.inner_text("body")
+            except Exception:
+                body = ""
+            m = re.search(r"Kesempatan\s*(\d+)\s*dari\s*(\d+)", body)
+            remaining = int(m.group(1)) if m else 0
+            total = int(m.group(2)) if m else 3
+            main_lagi = page.locator("button:has-text('Main Lagi'), a:has-text('Main Lagi')")
+            has_main_lagi = await main_lagi.count() > 0
+            log(f"[Quiz] After attempt {attempt}: chances {remaining} of {total}; 'Main Lagi' present: {has_main_lagi}")
 
-            if len(valid_answers) == 0:
-                log(f"[Step 6] No valid answer buttons -> quiz done")
-                break
+            if remaining > 0 and has_main_lagi and attempt < 3:
+                log(f"[Quiz] Clicking 'Main Lagi' for the next attempt...")
+                try:
+                    await main_lagi.first.click()
+                except Exception as e:
+                    log(f"[Quiz] Could not click 'Main Lagi': {e}")
+                    break
+                await page.wait_for_timeout(2000)
+                continue
+            log(f"[Quiz] No more chances — final result reached.")
+            break
 
-            # Click random answer
-            answer_idx = random.choice(valid_answers)
-            chosen_text = await answer_buttons.nth(answer_idx).inner_text()
-            log(f"[Step 6] Clicking answer #{answer_idx}: '{chosen_text[:40]}'")
-            await answer_buttons.nth(answer_idx).click()
-            question_count += 1
-
-            # Random human-like delay before next action (2-6 seconds)
-            think_time = random.uniform(2.0, 6.0)
-            log(f"[Step 6] Answered. Thinking for {think_time:.1f}s...")
-            await page.wait_for_timeout(int(think_time * 1000))
-
-            # Check for "Selesai" button
-            selesai_btn = page.locator("button:has-text('Selesai')")
-            if await selesai_btn.count() > 0 and await selesai_btn.is_visible():
-                log(f"[Step 6] Found 'Selesai' button -> Clicking to submit quiz...")
-                await selesai_btn.click()
-                log(f"[Step 6] Clicked 'Selesai'. Waiting for result page...")
-                await wait_for_result(page)
-                log(f"[Step 6] Wait complete. Taking screenshot...")
-                break
-
-            # Check for "Selanjutnya" button
-            next_btn = page.locator("button:has-text('Selanjutnya')")
-            if await next_btn.count() > 0 and await next_btn.is_visible():
-                log(f"[Step 6] Found 'Selanjutnya' -> Clicking next...")
-                await next_btn.click()
-                log(f"[Step 6] Waiting 1.5s for next question...")
-                await page.wait_for_timeout(1500)
-            else:
-                log(f"[Step 6] No 'Selanjutnya' button found")
-                if await selesai_btn.count() > 0:
-                    log(f"[Step 6] But 'Selesai' exists -> Clicking...")
-                    await selesai_btn.click()
-                    log(f"[Step 6] Clicked 'Selesai'. Waiting for result page...")
-                    await wait_for_result(page)
-                    log(f"[Step 6] Wait complete.")
-                else:
-                    log(f"[Step 6] No 'Selesai' either -> quiz done")
-                break
-
-        log(f"[Step 6] Total questions answered: {question_count}")
+        log(f"[Step 6] All quiz attempts finished.")
 
         # Step 7: Final screenshot
         log(f"[Step 7] Waiting 2s for page to settle...")

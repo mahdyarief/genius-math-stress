@@ -11,7 +11,7 @@ It registers a disposable identity per run (via cfmail `kvc.my.id`), solves the 
 1. Generate a random Indonesian name (from a large pool in `names.json`, no repeated first names across parallel processes).
 2. Create a disposable email `<username>@kvc.my.id` via cfmail.
 3. Fill the registration form and solve Cloudflare Turnstile via 2captcha (`TurnstileTaskProxyless`).
-4. Submit directly to the API, answer the quiz, and finalize.
+4. Submit directly to the API, answer the quiz, then keep clicking "Main Lagi" until all 3 chances are used.
 5. Screenshot the result page to `results_indo_open/YYYY-MM-DD/<username>.png`.
 
 ## Requirements

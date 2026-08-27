@@ -100,6 +100,11 @@ _NAME_LOCK_FILE = os.path.join(SCRIPT_DIR, "name_pool_state.lock")
 
 _NAME_SOURCE = os.path.join(SCRIPT_DIR, "names.json")
 
+# Persistent domain pool so parallel processes never repeat a domain
+# until the pool is exhausted, then it reshuffles and cycles.
+_DOMAIN_STATE_FILE = os.path.join(SCRIPT_DIR, "domain_pool_state.json")
+_DOMAIN_LOCK_FILE = os.path.join(SCRIPT_DIR, "domain_pool_state.lock")
+
 def _load_name_pools():
     """Load first/last name pools from names.json (unik-nama data source)."""
     with open(_NAME_SOURCE) as f:
@@ -187,6 +192,47 @@ def _fetch_available_domains():
     return []
 
 
+def _claim_domain(domains):
+    """Claim a domain without repeats across parallel processes."""
+    if not domains:
+        return None
+    fetched = set(domains)
+    for _ in range(100):
+        try:
+            fd = os.open(_DOMAIN_LOCK_FILE, os.O_CREAT | os.O_EXCL)
+            os.close(fd)
+            break
+        except FileExistsError:
+            time.sleep(0.1)
+    else:
+        return random.choice(domains)
+    try:
+        if os.path.exists(_DOMAIN_STATE_FILE):
+            with open(_DOMAIN_STATE_FILE) as f:
+                state = json.load(f)
+            pool, idx = state["pool"], state["idx"]
+            if set(pool) != fetched:
+                pool, idx = list(domains), 0
+                random.shuffle(pool)
+        else:
+            pool, idx = list(domains), 0
+            random.shuffle(pool)
+        if idx >= len(pool):
+            random.shuffle(pool)
+            idx = 0
+        domain = pool[idx]
+        tmp = _DOMAIN_STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"pool": pool, "idx": idx + 1}, f)
+        os.replace(tmp, _DOMAIN_STATE_FILE)
+        return domain
+    finally:
+        try:
+            os.unlink(_DOMAIN_LOCK_FILE)
+        except FileNotFoundError:
+            pass
+
+
 def create_cfmail_email(name):
     """Create a real disposable email via cfmail API with a random available domain."""
     try:
@@ -199,7 +245,7 @@ def create_cfmail_email(name):
 
         # Step 2: Create inbox with a random available domain (fallback to static)
         domains = _fetch_available_domains()
-        domain = random.choice(domains) if domains else CFMAIL_DOMAIN
+        domain = _claim_domain(domains) or CFMAIL_DOMAIN
         log(f"[cfmail] Using domain: {domain}")
 
         clean = name.lower().replace(" ", "").replace(".", "")

@@ -19,3 +19,8 @@ test_run_cookies.json
 name_pool_state.json
 name_pool_state.json.tmp
 name_pool_state.lock
+
+# Domain pool state (cross-process no-repeat cfmail domains)
+domain_pool_state.json
+domain_pool_state.json.tmp
+domain_pool_state.lock

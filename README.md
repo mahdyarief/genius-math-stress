@@ -12,7 +12,7 @@ It registers a disposable identity per run (via cfmail, random domain from avail
 2. Create a disposable email via cfmail using a randomly selected available domain (e.g. `kvc.my.id`, `toirate.com`, ...).
 3. Fill the registration form and solve Cloudflare Turnstile via 2captcha (`TurnstileTaskProxyless`).
 4. Submit directly to the API, answer the quiz, then keep clicking "Main Lagi" until all 3 chances are used.
-5. Screenshot the result page to `results_indo_open/YYYY-MM-DD/<username>.png`.
+5. Screenshot the result page to `results_indo_open/YYYY-MM-DD/<username>_<domain>.png`.
 
 ## Requirements
 
@@ -106,8 +106,8 @@ Example: 6679 runs at parallel 10:
 
 ## Output
 
-- Screenshots of result pages: `results_indo_open/YYYY-MM-DD/<username>.png`
-- Diagnostic screenshots on failure: `results_indo_open/YYYY-MM-DD/errors/<username>_<tag>.png`
+- Screenshots of result pages: `results_indo_open/YYYY-MM-DD/<username>_<domain>.png`
+- Diagnostic screenshots on failure: `results_indo_open/YYYY-MM-DD/errors/<username>_<domain>_<tag>.png`
 - Batch progress log: `batch_output_<target>.log`
 - Per-instance logs: `quiz_log_XX.txt`
 

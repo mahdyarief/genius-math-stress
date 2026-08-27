@@ -92,29 +92,133 @@ async def save_error_screenshot(page, name, tag):
     except Exception as e:
         log(f"[diag] {tag} screenshot failed: {e}")
 
+# Persistent first-name pool so parallel processes never repeat a first name
+# until the pool is exhausted, then it reshuffles and cycles.
+_NAME_STATE_FILE = os.path.join(SCRIPT_DIR, "name_pool_state.json")
+_NAME_LOCK_FILE = os.path.join(SCRIPT_DIR, "name_pool_state.lock")
+
+# Expanded Indonesian first names pool (~500 unique, deduplicated)
+FIRST_NAMES = [
+    # Male
+    "Ahmad", "Budi", "Eko", "Fajar", "Hadi", "Indra", "Joko", "Agus", "Bambang", "Cahya",
+    "Dimas", "Erik", "Farhan", "Galih", "Hendra", "Irfan", "Kevin", "Lukman", "Nanda", "Oki",
+    "Putra", "Reza", "Taufik", "Andi", "Andika", "Bayu", "Chandra", "Dani", "Faisal", "Gilang",
+    "Haris", "Ilham", "Luthfi", "Arif", "Bagas", "Cahyo", "Deni", "Endra", "Firmansyah", "Ghani",
+    "Hafiz", "Iqbal", "Jefri", "Adi", "Bimo", "Candra", "Dwi", "Edi", "Fauzi", "Gunawan",
+    "Heru", "Imam", "Dedi", "Rudi", "Slamet", "Teguh", "Tri", "Wahyu", "Wawan", "Yanto",
+    "Yono", "Zaenal", "Abdul", "Akbar", "Aldi", "Alif", "Andrian", "Angga", "Anwar", "Arief",
+    "Aris", "Arya", "Bagus", "Bima", "Darma", "Dodi", "Doni", "Edwin", "Fahri", "Fikri",
+    "Hamzah", "Haryanto", "Hendrik", "Iwan", "Jaka", "Johan", "Junianto", "Kurnia", "Mahdi", "Miftah",
+    "Nizar", "Nur", "Raka", "Rendra", "Rian", "Rizky", "Roni", "Rully", "Saiful", "Sandi",
+    "Satria", "Sigit", "Sugeng", "Surya", "Tedi", "Toni", "Ujang", "Wildan", "Yadi", "Yogi",
+    "Yoga", "Yusuf", "Aditya", "Afif", "Agung", "Alfian", "Alwi", "Ardi", "Arga", "Aryo",
+    "Bintang", "Catur", "Danang", "Dika", "Dio", "Eka", "Elang", "Fadhil", "Fahmi", "Faiz",
+    "Febri", "Ferdi", "Fitra", "Galang", "Genta", "Gibran", "Habib", "Hakim", "Haryo", "Heri",
+    "Hilman", "Ibnu", "Jafar", "Kamil", "Krisna", "Langgeng", "Leo", "Lutfi", "Mahesa", "Malik",
+    "Miko", "Mukti", "Naufal", "Nugroho", "Oka", "Okta", "Panca", "Pandu", "Pramudya", "Purnomo",
+    "Raden", "Raffi", "Ragil", "Raihan", "Rama", "Ramdan", "Rangga", "Rayhan", "Ridho", "Rizki",
+    "Robi", "Romi", "Roy", "Sadewa", "Samsul", "Sandy", "Sani", "Satrio", "Setyo", "Suryo",
+    "Syahrul", "Tama", "Tegar", "Tomy", "Topan", "Umar", "Urip", "Vino", "Wahid", "Wandi",
+    "Wibowo", "Widya", "Wira", "Wisnu", "Yanuar", "Yayan", "Yudha", "Yudistira", "Zaki", "Zulkifli",
+    # Female
+    "Citra", "Dewi", "Gita", "Kartika", "Lina", "Maya", "Nina", "Putri", "Rina", "Sari",
+    "Jihan", "Mira", "Qori", "Sinta", "Bella", "Cindy", "Dian", "Elisa", "Fitri", "Grace",
+    "Hana", "Ika", "Julia", "Aulia", "Bulan", "Cantika", "Della", "Elsa", "Gisela",
+    "Hesti", "Indah", "Janet", "Ani", "Betty", "Clara", "Dina", "Eva", "Flora", "Gina",
+    "Heni", "Ira", "Julie", "Anggun", "Aisyah", "Amanda", "Amelia", "Annisa", "Ayu", "Bunga",
+    "Cinta", "Devi", "Dinda", "Dini", "Dita", "Erna", "Farida", "Fatimah", "Feni", "Halimah",
+    "Intan", "Kartini", "Khadijah", "Laila", "Laras", "Lestari", "Lita", "Mala", "Maria", "Mega",
+    "Melati", "Melinda", "Murni", "Nabila", "Nadia", "Naila", "Nurul", "Puspita", "Rahma", "Ratih",
+    "Ratna", "Rindu", "Safitri", "Salma", "Sekar", "Sri", "Sulis", "Susi", "Tari", "Triana",
+    "Utami", "Vina", "Winda", "Yanti", "Yulia", "Zahra", "Zulfa", "Ade", "Adinda", "Aida",
+    "Alya", "Ambar", "Ananda", "Anita", "Arum", "Asih", "Asti", "Atika", "Azizah", "Cahaya",
+    "Cempaka", "Dahlia", "Dara", "Delia", "Diah", "Diana", "Diandra", "Elya", "Eni", "Erni",
+    "Euis", "Farah", "Fatin", "Fauziah", "Feny", "Fitria", "Gadis", "Galuh",
+    "Gendis", "Ghea", "Hanna", "Hilda", "Hilya", "Ica", "Ida", "Ilmi", "Ina", "Indri",
+    "Irene", "Irma", "Ismi", "Ita", "Ivana", "Jamilah", "Jannah", "Jayanti", "Jelita", "Jeni",
+    "Julianti", "Junita", "Kania", "Karina", "Kasih", "Keisha", "Kiki", "Kinasih", "Kinanti", "Kirana",
+    "Laksmi", "Larasati", "Leni", "Lidya", "Lili", "Lisa", "Lola", "Lulu", "Lusi", "Maharani",
+    "Manda", "Marisa", "Marta", "Mayang", "Meilani", "Melisa", "Mentari", "Mery", "Mila", "Mita",
+    "Mulia", "Mutiara", "Nadhira", "Nadine", "Nafisa", "Nani", "Nastiti", "Natasya", "Nayla", "Nia",
+    "Nila", "Ningrum", "Ningsih", "Nisa", "Nita", "Noor", "Novi", "Nuri", "Nurma", "Olivia",
+    "Paramita", "Permatasari", "Pertiwi", "Poppy", "Prita", "Puji", "Puspa", "Puteri", "Rahayu", "Rahmi",
+    "Rara", "Ratu", "Reni", "Restu", "Retno", "Ria", "Riani", "Rika", "Rini", "Rita",
+    "Rizka", "Rosi", "Rossa", "Sabila", "Salsabila", "Santi", "Sarah", "Sarinah", "Selvi", "Serena",
+    "Shafira", "Shinta", "Silvia", "Siti", "Sofi", "Srikandi", "Sumiati", "Susanti", "Syifa", "Talitha",
+    "Tania", "Tara", "Tasya", "Tati", "Tia", "Tika", "Tini", "Tirta", "Titi", "Tri",
+    "Tuti", "Uci", "Ulfa", "Ulya", "Umi", "Utari", "Vania", "Vera", "Veronica", "Vira",
+    "Vita", "Vivi", "Wafiq", "Wanda", "Wati", "Weni", "Widia", "Wulan", "Yani", "Yasmin",
+    "Yeni", "Yessica", "Yohana", "Yona", "Yuli", "Yunita", "Yusnita", "Zahwa", "Zainab", "Zakia",
+    "Zalfa", "Zaskia", "Zubaidah", "Zulaikha",
+]
+
+MIDDLE_NAMES = [
+    "Maulana", "Ramadhan", "Pratama", "Saputra", "Nugraha", "Prasetyo", "Kurniawan", "Setiawan",
+    "Wijaya", "Hidayat", "Santoso", "Permana", "Aji", "Bagus", "Bintang", "Cahyo", "Dwi",
+    "Eka", "Galih", "Haryo", "Ibnu", "Jati", "Kusuma", "Laksana", "Mahendra", "Nata", "Pandu",
+    "Raka", "Satria", "Tama", "Wira", "Yudha", "Zaki", "Ardhi", "Bagaskara", "Cakra", "Daru",
+    "Eshan", "Fajar", "Genta", "Hendra", "Irawan", "Jatmiko", "Kirana", "Lazuardi", "Manggala", "Narendra",
+    "Oka", "Prameswara", "Rahardian", "Surya", "Tirta", "Umar", "Veda", "Wicaksana", "Yusuf", "Azhari",
+]
+
+LAST_NAMES = [
+    "Pratama", "Wijaya", "Santoso", "Hidayat", "Kurniawan", "Saputra", "Permata", "Lestari", "Nugroho", "Susanto",
+    "Wibowo", "Handayani", "Kusuma", "Rahman", "Setiawan", "Surya", "Purnama", "Sari", "Dewi", "Anggraini",
+    "Firmansyah", "Hakim", "Iskandar", "Jaya", "Kartika", "Lesmana", "Mahendra", "Nugraha", "Oktavia", "Prasetyo",
+    "Ramadhan", "Salim", "Tamara", "Utama", "Valentina", "Wulandari", "Yuliana", "Zubaidi", "Arifin", "Bahar",
+    "Cahyono", "Darmawan", "Effendi", "Gunawan", "Hartono", "Irawan", "Julianto", "Kurniadi", "Laksono", "Maulana",
+    "Nainggolan", "Oktaviano", "Prabowo", "Rizaldi", "Saputro", "Tjahjadi", "Utomo", "Virgianti", "Wicaksono", "Yudhistira",
+    "Abdullah", "Bagaskara", "Cakrawala", "Dhanu", "Elang", "Firmanda", "Ghani", "Hermawan", "Ibrahim", "Junaedi",
+    "Aditya", "Anggara", "Ardiansyah", "Ariyanto", "Asmoro", "Basuki", "Budiman", "Cahyadi", "Darmawan", "Fauzi",
+    "Firdaus", "Gunarto", "Hadi", "Halim", "Harahap", "Hariyanto", "Hasibuan", "Hutapea", "Ilham", "Juliansyah",
+    "Kamal", "Kartono", "Kurnia", "Kusnadi", "Laksana", "Lukman", "Marbun", "Marpaung", "Mulyadi", "Mustofa",
+    "Nasution", "Natawijaya", "Nurhadi", "Nursalim", "Panggabean", "Pangestu", "Prayitno", "Purnomo", "Putranto", "Rachman",
+    "Rahardjo", "Rahmawan", "Rusdianto", "Saputra", "Sasmito", "Setiabudi", "Siahaan", "Simanjuntak", "Sinaga",
+    "Siregar", "Situmorang", "Sudrajat", "Suhartono", "Sukma", "Sumantri", "Supriyadi", "Suryadi", "Sutanto", "Syahputra",
+    "Tambunan", "Tanuwijaya", "Tarigan", "Wardhana", "Widyanto", "Winata", "Yusuf", "Zulkarnaen", "Azhari",
+    "Chaerul", "Darmadi", "Erlangga", "Febriansyah", "Ginting", "Halomoan", "Handoko", "Iskandar", "Kusumo", "Lubis",
+    "Mangunsong", "Napitupulu", "Pamungkas", "Perdana", "Rajagukguk", "Ritonga", "Samosir", "Sitompul", "Suhendra", "Suryanto",
+]
+
+def _claim_first_name():
+    for _ in range(100):
+        try:
+            fd = os.open(_NAME_LOCK_FILE, os.O_CREAT | os.O_EXCL)
+            os.close(fd)
+            break
+        except FileExistsError:
+            time.sleep(0.1)
+    else:
+        return random.choice(FIRST_NAMES)
+
+    try:
+        if os.path.exists(_NAME_STATE_FILE):
+            with open(_NAME_STATE_FILE) as f:
+                state = json.load(f)
+            pool, idx = state["pool"], state["idx"]
+        else:
+            pool, idx = list(FIRST_NAMES), 0
+            random.shuffle(pool)
+        if idx >= len(pool):
+            random.shuffle(pool)
+            idx = 0
+        name = pool[idx]
+        tmp = _NAME_STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"pool": pool, "idx": idx + 1}, f)
+        os.replace(tmp, _NAME_STATE_FILE)
+        return name
+    finally:
+        try:
+            os.unlink(_NAME_LOCK_FILE)
+        except FileNotFoundError:
+            pass
+
 def random_name():
-    first_names = [
-        "Ahmad", "Budi", "Citra", "Dewi", "Eko", "Fajar", "Gita", "Hadi", "Indra", "Joko",
-        "Kartika", "Lina", "Maya", "Nina", "Omar", "Putri", "Rina", "Sari", "Tono", "Umar",
-        "Agus", "Bambang", "Cahya", "Dimas", "Erik", "Farhan", "Galih", "Hendra", "Irfan", "Jihan",
-        "Kevin", "Lukman", "Mira", "Nanda", "Oki", "Putra", "Qori", "Reza", "Sinta", "Taufik",
-        "Andi", "Bella", "Cindy", "Dian", "Elisa", "Fitri", "Grace", "Hana", "Ika", "Julia",
-        "Andika", "Bayu", "Chandra", "Dani", "Faisal", "Gilang", "Haris", "Ilham", "Kevin", "Luthfi",
-        "Aulia", "Bulan", "Cantika", "Della", "Elsa", "Febri", "Gisela", "Hesti", "Indah", "Janet",
-        "Arif", "Bagas", "Cahyo", "Deni", "Endra", "Firmansyah", "Ghani", "Hafiz", "Iqbal", "Jefri",
-        "Adi", "Bimo", "Candra", "Dwi", "Edi", "Fauzi", "Gunawan", "Heru", "Imam", "Joko",
-        "Ani", "Betty", "Clara", "Dina", "Eva", "Flora", "Gina", "Heni", "Ira", "Julie"
-    ]
-    last_names = [
-        "Pratama", "Wijaya", "Santoso", "Hidayat", "Kurniawan", "Saputra", "Permata", "Lestari", "Nugroho", "Susanto",
-        "Wibowo", "Handayani", "Kusuma", "Rahman", "Setiawan", "Surya", "Purnama", "Sari", "Dewi", "Anggraini",
-        "Firmansyah", "Hakim", "Iskandar", "Jaya", "Kartika", "Lesmana", "Mahendra", "Nugraha", "Oktavia", "Prasetyo",
-        "Ramadhan", "Salim", "Tamara", "Utama", "Valentina", "Wulandari", "Yuliana", "Zubaidi", "Arifin", "Bahar",
-        "Cahyono", "Darmawan", "Effendi", "Gunawan", "Hartono", "Irawan", "Julianto", "Kurniadi", "Laksono", "Maulana",
-        "Nainggolan", "Oktaviano", "Prabowo", "Rizaldi", "Saputro", "Tjahjadi", "Utomo", "Virgianti", "Wicaksono", "Yudhistira",
-        "Abdullah", "Bagaskara", "Cakrawala", "Dhanu", "Elang", "Firmanda", "Ghani", "Hermawan", "Ibrahim", "Junaedi"
-    ]
-    return f"{random.choice(first_names)} {random.choice(last_names)}"
+    first = _claim_first_name()
+    middle = random.choice(MIDDLE_NAMES) if random.random() < 0.4 else None
+    last = random.choice(LAST_NAMES)
+    return f"{first} {middle} {last}" if middle else f"{first} {last}"
 
 def create_cfmail_email(name):
     """Create a real disposable email via cfmail API with static domain."""

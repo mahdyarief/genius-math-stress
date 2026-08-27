@@ -562,7 +562,11 @@ async def start_quiz(page, test_username):
 
     # Retry: reload once and wait longer before giving up.
     log(f"[Quiz] No quiz buttons found. Reloading page and retrying...")
-    await page.reload(wait_until="networkidle", timeout=30000)
+    try:
+        await page.reload(wait_until="networkidle", timeout=30000)
+    except Exception as e:
+        log(f"[Quiz] Page reload failed: {e}")
+        return False
     await page.wait_for_timeout(3000)
     mulai_btn_retry = page.locator("button:has-text('Mulai Kerjakan Soal')")
     answer_probe_retry = page.locator("button:has-text('A'), button:has-text('B'), button:has-text('C'), button:has-text('D')")
@@ -805,7 +809,11 @@ async def run_once(browser, run_num):
             await save_error_screenshot(page, test_username, "step4_rejected")
             return False
         log(f"[Step 4] Entry accepted. Reloading page to enter quiz state...")
-        await page.reload(wait_until="networkidle", timeout=30000)
+        try:
+            await page.reload(wait_until="networkidle", timeout=30000)
+        except Exception as e:
+            log(f"[Step 4] Page reload failed after entry accepted: {e}")
+            return False
         await page.wait_for_timeout(2000)
 
         # Step 5-6: Play the quiz, then keep clicking "Main Lagi" for a
@@ -858,7 +866,11 @@ async def run_once(browser, run_num):
         await page.wait_for_timeout(2000)
 
         # Log page state before screenshot
-        page_text = await page.inner_text("body")
+        try:
+            page_text = await page.inner_text("body")
+        except Exception as e:
+            log(f"[Step 7] inner_text failed (page may be broken): {e}")
+            page_text = ""
         visible_lines = [l.strip() for l in page_text.split('\n') if l.strip()]
         log(f"[Step 7] Page has {len(visible_lines)} visible text lines")
         log(f"[Step 7] First 10 lines:")

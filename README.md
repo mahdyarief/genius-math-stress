@@ -1,79 +1,126 @@
-# Genius Math Challenge — Controlled Load-Test Harness
+# Genius Math Stress — Load-Test Harness (Indonesia Open)
 
-Stress-test terkontrol untuk endpoint kompetisi **Genius Math Challenge**
-(`hrsmile2025.techconnect.co.id/c/genius-math-challenge`). Dibuat untuk
-pemilik/operator situs guna mengukur ketahanan backend di bawah lalu lintas
-bersamaan. Bukan bot pemenang kompetisi dan bukan credential harvester.
+Automated quiz submission harness for the **Genius Math Challenge (Indonesia Open)** competition at `https://geniusmath.techconnect.co.id/c/indonesiaopen`.
 
-## Endpoint yang diuji (rekonstruksi dari client JS + observasi prod)
+It registers a disposable identity per run (via cfmail `kvc.my.id`), solves the Cloudflare Turnstile challenge via **2captcha**, answers the quiz, submits, and captures a screenshot of the result. Designed to run long batches in parallel on both **Linux** and **Windows**.
 
-| Method | Path | Keterangan |
-|--------|------|------------|
-| GET  | `/api/c/{slug}/quiz` | Ambil state attempt / soal. Anonim → `{"status":"not_entered"}`; tanpa cookie → `{"requiresLogin":true}`. |
-| POST | `/api/c/{slug}/enter` | Daftar identitas. Body: `{fullName,email,phone,province,city,ageRange,wonMathCompetition,interestedInCompetition}`. `province` = nama provinsi (bukan code), `ageRange` = enum `age_6_12|age_13_17|age_18_25|age_26_35|age_36_plus`. |
-| POST | `/api/competitions/45/answers` | Simpan jawaban. Body `{questionId, answer}`. |
-| POST | `/api/competitions/45/submit` | Finalisasi attempt. Body kosong (content-length 0). |
-| POST | `/api/competitions/45/violations` | Sinyal kecurangan. |
+> This is a load-test harness for the site owner/operator to measure backend resilience under concurrent traffic. It is not a prize-winning bot or a credential harvester.
 
-- `slug` = `genius-math-challenge`
-- Competition id = `45`
-- Auth **cookie-based**: `amo_session=...` (didapat setelah login di browser).
+## How it works
 
-## Keamanan
+1. Generate a random Indonesian name (from a large pool in `names.json`, no repeated first names across parallel processes).
+2. Create a disposable email `<username>@kvc.my.id` via cfmail.
+3. Fill the registration form and solve Cloudflare Turnstile via 2captcha (`TurnstileTaskProxyless`).
+4. Submit directly to the API, answer the quiz, and finalize.
+5. Screenshot the result page to `results_indo_open/YYYY-MM-DD/<username>.png`.
 
-- Cookie session = akses penuh ke akun. **Jangan bagi/commit ke VCS.** Rotate
-  (logout / ganti password) setelah selesai testing.
-- Script tidak menyimpan cookie ke disk saat dijalankan dengan `--amo-session`.
-- Endpoint write (enter/answers/submit) **mengonsumsi attempt** (maks 3/akun).
-  Jangan jalankan terhadap akun produksi yang ingin dipertahankan skornya.
+## Requirements
 
-## Cara jalanin
+- **Python 3.10+** (Linux or Windows)
+- A **2captcha** API key (https://2captcha.com) — used to solve Turnstile
+- Internet access to `kvc.my.id` (cfmail) and the competition site
 
-Butuh Python 3 (stdlib only, tidak ada dependency):
+Everything else (patchright, Playwright Chromium) is installed automatically by the setup script.
+
+## Setup
+
+### Linux / macOS
 
 ```bash
-# Dry-run: cetak rencana tanpa menyentuh network
-python3 stress_genius_math.py --dry-run --endpoint submit
-
-# Read-only: GET /quiz dengan cookie (aman, tidak mengubah state)
-python3 stress_genius_math.py --endpoint quiz \
-  --amo-session "PASTE_AMO_SESSION_HERE" \
-  --max-requests 1
-
-# Stress endpoint enter (write — butuh akun test khusus!)
-python3 stress_genius_math.py --endpoint enter \
-  --amo-session "PASTE_AMO_SESSION_HERE" \
-  --concurrency 4 --rps 2 --max-requests 50 --verbose
-
-# Gunakan cookie jar dari curl (-c) sebagai ganti --amo-session
-curl -c jar.txt -b ... '.../login'
-python3 stress_genius_math.py --endpoint answers --cookies jar.txt
+./setup.sh
 ```
 
-## Parameter
+### Windows (PowerShell or CMD)
 
-| Flag | Default | Fungsi |
-|------|---------|--------|
-| `--endpoint` | `enter` | `enter` / `quiz` / `answers` / `submit` |
-| `--amo-session` | – | Nilai `amo_session` (atau via env `AMO_SESSION`) |
-| `--cookies` | – | File cookie jar Netscape (curl -c) |
-| `--concurrency` | 4 | Thread paralel maksimum |
-| `--rps` | 1.0 | Batas request/detik |
-| `--max-requests` | 10 | Hard stop total request |
-| `--timeout` | 15.0 | Timeout per request (detik) |
-| `--verbose` | off | Cetak respons tiap request |
-| `--dry-run` | off | Cetak rencana, tanpa network |
+```
+setup.bat
+```
 
-## Safety built-in
+Both scripts:
+- create a `.venv` virtual environment
+- install `requirements.txt` (pins `patchright==1.62.1`)
+- install the Chromium browser for patchright
 
-- RPS cap + hard stop `--max-requests`.
-- Menghormati HTTP 429 + header `Retry-After` (cetak peringatan).
-- Default sangat pelan (conc 4, rps 1, max 10) — naikkan bertahap.
+### Configure the 2captcha key
 
-## Catatan reverse-engineering
+Copy the template and fill in your real key:
 
-- `GET /quiz` tanpa/auth → `{"status":"not_entered"}`; dengan cookie tapi belum
-  main → bentuk soal; sudah main → state attempt (skor, tier, attemptsUsed).
-- `enter` wajib field lengkap; `province` harus **nama** ("Aceh", "Daerah
-  Khusus Ibukota Jakarta", dst), `ageRange` enum `age_*`.
-- `/api/competitions/{id}/...` pakai **competition id numerik** (45), bukan slug.
+```bash
+cp .secret.example .secret
+# then edit .secret:
+#   2captcha_key=YOUR_REAL_KEY_HERE
+```
+
+On Windows:
+
+```
+copy .secret.example .secret
+```
+
+The runner reads the key in this order:
+1. `CAPTCHA_API_KEY` environment variable
+2. `2CAPTCHA_KEY` environment variable
+3. `.secret` file in the project folder (or parent folder)
+
+`.secret` is gitignored and never committed.
+
+## Running
+
+### Linux / macOS
+
+```bash
+# Run 1,000 submissions, 10 in parallel (foreground)
+./run.sh --target 1000 --parallel 10
+
+# Background with log file (like nohup)
+nohup ./run.sh --target 1000 --parallel 10 > batch_output.log 2>&1 &
+```
+
+### Windows
+
+```powershell
+# Foreground (blocks the terminal until done)
+.\run.bat --target 1000 --parallel 10 > batch_output.log 2>&1
+
+# Background (terminal is not blocked, window hidden)
+Start-Process -WindowStyle Hidden -FilePath ".\.venv\Scripts\python.exe" -ArgumentList "-u run_batch_indo_open.py --target 1000 --parallel 10" -RedirectStandardOutput "batch_output.log" -RedirectStandardError "batch_output_err.log"
+```
+
+## Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--target` | 14300 | Total successful runs to reach |
+| `--parallel` | 5 | Instances running at once per batch (10 is fine) |
+| `--duration` | 0 | Max runtime in hours (0 = run until target reached) |
+
+Example: 6679 runs at parallel 10:
+
+```bash
+./run.sh --target 6679 --parallel 10
+```
+
+## Output
+
+- Screenshots of result pages: `results_indo_open/YYYY-MM-DD/<username>.png`
+- Diagnostic screenshots on failure: `results_indo_open/YYYY-MM-DD/errors/<username>_<tag>.png`
+- Batch progress log: `batch_output.log`
+- Per-instance logs: `quiz_log_XX.txt`
+
+## Project structure
+
+| File | Purpose |
+|------|---------|
+| `take_quiz_indo_open.py` | Per-account automation (register, solve captcha, answer, submit, screenshot) |
+| `run_batch_indo_open.py` | Batch runner — spawns parallel instances, counts success |
+| `run.sh` / `run.bat` | Launchers that always boot under the project venv |
+| `setup.sh` / `setup.bat` | One-shot setup (venv + deps + browser) |
+| `names.json` | Name pool data source (first/last names) |
+| `.secret.example` | Template for the 2captcha key file |
+
+## Troubleshooting
+
+- **"venv python not found"** — run `./setup.sh` (or `setup.bat`) first; the venv must exist.
+- **Batch fails 0/10 instantly** — make sure you launched via `./run.sh` (not plain `python3`), so child processes use the venv interpreter that has patchright.
+- **Captcha rate-limit** — 2captcha can be overwhelmed by many simultaneous Turnstile requests; drop `--parallel` if you see whole batches fail.
+- **Screenshots show loading state** — the harness waits for the result page before capturing; if you still see this, the result page took longer than the 60s poll window.

@@ -2,14 +2,14 @@
 
 Automated quiz submission harness for the **Genius Math Challenge (Indonesia Open)** competition at `https://geniusmath.techconnect.co.id/c/indonesiaopen`.
 
-It registers a disposable identity per run (via cfmail `kvc.my.id`), solves the Cloudflare Turnstile challenge via **2captcha**, answers the quiz, submits, and captures a screenshot of the result. Designed to run long batches in parallel on both **Linux** and **Windows**.
+It registers a disposable identity per run (via cfmail, random domain from available list), solves the Cloudflare Turnstile challenge via **2captcha**, answers the quiz (up to 3 attempts per identity), submits, and captures a screenshot of the result. Designed to run long batches in parallel on both **Linux** and **Windows**.
 
 > This is a load-test harness for the site owner/operator to measure backend resilience under concurrent traffic. It is not a prize-winning bot or a credential harvester.
 
 ## How it works
 
 1. Generate a random Indonesian name (from a large pool in `names.json`, no repeated first names across parallel processes).
-2. Create a disposable email `<username>@kvc.my.id` via cfmail.
+2. Create a disposable email via cfmail using a randomly selected available domain (e.g. `kvc.my.id`, `toirate.com`, ...).
 3. Fill the registration form and solve Cloudflare Turnstile via 2captcha (`TurnstileTaskProxyless`).
 4. Submit directly to the API, answer the quiz, then keep clicking "Main Lagi" until all 3 chances are used.
 5. Screenshot the result page to `results_indo_open/YYYY-MM-DD/<username>.png`.
@@ -18,7 +18,7 @@ It registers a disposable identity per run (via cfmail `kvc.my.id`), solves the 
 
 - **Python 3.10+** (Linux or Windows)
 - A **2captcha** API key (https://2captcha.com) — used to solve Turnstile
-- Internet access to `kvc.my.id` (cfmail) and the competition site
+- Internet access to cfmail (`https://cfmail.solution.qzz.io`) and the competition site
 
 Everything else (patchright, Playwright Chromium) is installed automatically by the setup script.
 

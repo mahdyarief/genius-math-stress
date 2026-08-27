@@ -171,8 +171,24 @@ def random_name():
     last = random.choice(LAST_NAMES)
     return f"{first} {middle} {last}" if middle else f"{first} {last}"
 
+def _fetch_available_domains():
+    """Fetch the list of available domains from the cfmail API."""
+    try:
+        req = urllib.request.Request(f"{CFMAIL_API}/domains", method="GET")
+        req.add_header("User-Agent", "Mozilla/5.0")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        domains = [d for d in data.get("domains", []) if d]
+        if domains:
+            log(f"[cfmail] Available domains: {', '.join(domains)}")
+            return domains
+    except Exception as e:
+        log(f"[cfmail] Failed to fetch domains: {e}")
+    return []
+
+
 def create_cfmail_email(name):
-    """Create a real disposable email via cfmail API with static domain."""
+    """Create a real disposable email via cfmail API with a random available domain."""
     try:
         # Step 1: Create session
         req = urllib.request.Request(f"{CFMAIL_API}/session", method="GET")
@@ -181,14 +197,18 @@ def create_cfmail_email(name):
             session_data = json.loads(resp.read().decode())
             session_id = session_data["sessionId"]
 
-        # Step 2: Create inbox with static domain
+        # Step 2: Create inbox with a random available domain (fallback to static)
+        domains = _fetch_available_domains()
+        domain = random.choice(domains) if domains else CFMAIL_DOMAIN
+        log(f"[cfmail] Using domain: {domain}")
+
         clean = name.lower().replace(" ", "").replace(".", "")
         num = random.randint(1, 9999)
         address = f"{clean}{num}"
 
         req = urllib.request.Request(
             f"{CFMAIL_API}/inboxes",
-            data=json.dumps({"localPart": address, "domain": CFMAIL_DOMAIN}).encode(),
+            data=json.dumps({"localPart": address, "domain": domain}).encode(),
             headers={"Content-Type": "application/json", "x-session-id": session_id},
             method="POST"
         )
@@ -741,16 +761,18 @@ async def run_once(browser, run_num):
         await page.reload(wait_until="networkidle", timeout=30000)
         await page.wait_for_timeout(2000)
 
-        # Step 5-6: Play the quiz, then keep clicking "Main Lagi" until all
-        # 3 chances are used up (Kesempatan X dari 3).
+        # Step 5-6: Play the quiz, then keep clicking "Main Lagi" for a
+        # random number of attempts (1-3) per identity (Kesempatan X dari 3).
         await page.wait_for_timeout(3000)
         log(f"[Step 5] Current URL: {page.url}")
 
+        max_attempts = random.randint(1, 3)
+        log(f"[Quiz] This identity will play {max_attempts} attempt(s).")
         attempt = 0
         while True:
             attempt += 1
             log(f"{'='*60}")
-            log(f"  QUIZ ATTEMPT {attempt}/3")
+            log(f"  QUIZ ATTEMPT {attempt}/{max_attempts}")
             log(f"{'='*60}")
 
             if not await start_quiz(page, test_username):
@@ -770,7 +792,7 @@ async def run_once(browser, run_num):
             has_main_lagi = await main_lagi.count() > 0
             log(f"[Quiz] After attempt {attempt}: chances {remaining} of {total}; 'Main Lagi' present: {has_main_lagi}")
 
-            if remaining > 0 and has_main_lagi and attempt < 3:
+            if remaining > 0 and has_main_lagi and attempt < max_attempts:
                 log(f"[Quiz] Clicking 'Main Lagi' for the next attempt...")
                 try:
                     await main_lagi.first.click()

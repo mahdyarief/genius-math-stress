@@ -30,6 +30,20 @@ BATCH_DATE = datetime.now().strftime("%Y-%m-%d")
 BATCH_DIR = os.path.join(RESULTS_DIR, BATCH_DATE)
 
 
+class _Tee:
+    """Duplicates writes to multiple streams (console + log file)."""
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+
+    def flush(self):
+        for s in self.streams:
+            s.flush()
+
+
 def _load_captcha_key():
     key = os.environ.get("CAPTCHA_API_KEY", "")
     if key:
@@ -90,6 +104,13 @@ async def main():
     parser.add_argument("--duration", type=float, default=0, help="Max duration in hours (0 = run until target reached)")
     args = parser.parse_args()
 
+    # Auto-generate batch_output_<target>.log (tee: console + file), so no
+    # manual `> batch_output_N.log 2>&1` redirect is needed.
+    log_path = os.path.join(SCRIPT_DIR, f"batch_output_{args.target}.log")
+    log_file = open(log_path, "w", encoding="utf-8", buffering=1)
+    sys.stdout = _Tee(sys.__stdout__, log_file)
+    sys.stderr = _Tee(sys.__stderr__, log_file)
+
     os.makedirs(BATCH_DIR, exist_ok=True)
 
     duration_limit = args.duration * 3600 if args.duration > 0 else None
@@ -102,6 +123,7 @@ async def main():
     if duration_limit:
         print(f"  Duration limit: {args.duration} hours")
     print(f"  Est. batches: {(args.target + args.parallel - 1) // args.parallel}")
+    print(f"  Log file: {log_path}")
     print(f"  Output folder: {BATCH_DIR}")
     print(f"  Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*60}")

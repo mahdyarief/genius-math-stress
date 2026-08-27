@@ -68,22 +68,26 @@ The runner reads the key in this order:
 
 ### Linux / macOS
 
+The runner automatically writes a log file `batch_output_<target>.log`
+(e.g. `batch_output_1000.log`) while still printing progress to the console,
+so no manual redirect is needed.
+
 ```bash
 # Run 1,000 submissions, 10 in parallel (foreground)
 ./run.sh --target 1000 --parallel 10
 
-# Background with log file (like nohup)
-nohup ./run.sh --target 1000 --parallel 10 > batch_output.log 2>&1 &
+# Background (like nohup) — log is still auto-generated
+nohup ./run.sh --target 1000 --parallel 10 >/dev/null 2>&1 &
 ```
 
 ### Windows
 
 ```powershell
-# Foreground (blocks the terminal until done)
-.\run.bat --target 1000 --parallel 10 > batch_output.log 2>&1
+# Foreground (blocks the terminal until done) — log is auto-generated
+.\run.bat --target 1000 --parallel 10
 
-# Background (terminal is not blocked, window hidden)
-Start-Process -WindowStyle Hidden -FilePath ".\.venv\Scripts\python.exe" -ArgumentList "-u run_batch_indo_open.py --target 1000 --parallel 10" -RedirectStandardOutput "batch_output.log" -RedirectStandardError "batch_output_err.log"
+# Background (terminal is not blocked, window hidden) — log is auto-generated
+Start-Process -WindowStyle Hidden -FilePath ".\.venv\Scripts\python.exe" -ArgumentList "-u run_batch_indo_open.py --target 1000 --parallel 10"
 ```
 
 ## Options
@@ -104,7 +108,7 @@ Example: 6679 runs at parallel 10:
 
 - Screenshots of result pages: `results_indo_open/YYYY-MM-DD/<username>.png`
 - Diagnostic screenshots on failure: `results_indo_open/YYYY-MM-DD/errors/<username>_<tag>.png`
-- Batch progress log: `batch_output.log`
+- Batch progress log: `batch_output_<target>.log`
 - Per-instance logs: `quiz_log_XX.txt`
 
 ## Project structure

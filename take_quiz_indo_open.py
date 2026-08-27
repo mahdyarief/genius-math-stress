@@ -97,60 +97,29 @@ async def save_error_screenshot(page, name, tag):
 _NAME_STATE_FILE = os.path.join(SCRIPT_DIR, "name_pool_state.json")
 _NAME_LOCK_FILE = os.path.join(SCRIPT_DIR, "name_pool_state.lock")
 
-# Expanded Indonesian first names pool (~500 unique, deduplicated)
-FIRST_NAMES = [
-    # Male
-    "Ahmad", "Budi", "Eko", "Fajar", "Hadi", "Indra", "Joko", "Agus", "Bambang", "Cahya",
-    "Dimas", "Erik", "Farhan", "Galih", "Hendra", "Irfan", "Kevin", "Lukman", "Nanda", "Oki",
-    "Putra", "Reza", "Taufik", "Andi", "Andika", "Bayu", "Chandra", "Dani", "Faisal", "Gilang",
-    "Haris", "Ilham", "Luthfi", "Arif", "Bagas", "Cahyo", "Deni", "Endra", "Firmansyah", "Ghani",
-    "Hafiz", "Iqbal", "Jefri", "Adi", "Bimo", "Candra", "Dwi", "Edi", "Fauzi", "Gunawan",
-    "Heru", "Imam", "Dedi", "Rudi", "Slamet", "Teguh", "Tri", "Wahyu", "Wawan", "Yanto",
-    "Yono", "Zaenal", "Abdul", "Akbar", "Aldi", "Alif", "Andrian", "Angga", "Anwar", "Arief",
-    "Aris", "Arya", "Bagus", "Bima", "Darma", "Dodi", "Doni", "Edwin", "Fahri", "Fikri",
-    "Hamzah", "Haryanto", "Hendrik", "Iwan", "Jaka", "Johan", "Junianto", "Kurnia", "Mahdi", "Miftah",
-    "Nizar", "Nur", "Raka", "Rendra", "Rian", "Rizky", "Roni", "Rully", "Saiful", "Sandi",
-    "Satria", "Sigit", "Sugeng", "Surya", "Tedi", "Toni", "Ujang", "Wildan", "Yadi", "Yogi",
-    "Yoga", "Yusuf", "Aditya", "Afif", "Agung", "Alfian", "Alwi", "Ardi", "Arga", "Aryo",
-    "Bintang", "Catur", "Danang", "Dika", "Dio", "Eka", "Elang", "Fadhil", "Fahmi", "Faiz",
-    "Febri", "Ferdi", "Fitra", "Galang", "Genta", "Gibran", "Habib", "Hakim", "Haryo", "Heri",
-    "Hilman", "Ibnu", "Jafar", "Kamil", "Krisna", "Langgeng", "Leo", "Lutfi", "Mahesa", "Malik",
-    "Miko", "Mukti", "Naufal", "Nugroho", "Oka", "Okta", "Panca", "Pandu", "Pramudya", "Purnomo",
-    "Raden", "Raffi", "Ragil", "Raihan", "Rama", "Ramdan", "Rangga", "Rayhan", "Ridho", "Rizki",
-    "Robi", "Romi", "Roy", "Sadewa", "Samsul", "Sandy", "Sani", "Satrio", "Setyo", "Suryo",
-    "Syahrul", "Tama", "Tegar", "Tomy", "Topan", "Umar", "Urip", "Vino", "Wahid", "Wandi",
-    "Wibowo", "Widya", "Wira", "Wisnu", "Yanuar", "Yayan", "Yudha", "Yudistira", "Zaki", "Zulkifli",
-    # Female
-    "Citra", "Dewi", "Gita", "Kartika", "Lina", "Maya", "Nina", "Putri", "Rina", "Sari",
-    "Jihan", "Mira", "Qori", "Sinta", "Bella", "Cindy", "Dian", "Elisa", "Fitri", "Grace",
-    "Hana", "Ika", "Julia", "Aulia", "Bulan", "Cantika", "Della", "Elsa", "Gisela",
-    "Hesti", "Indah", "Janet", "Ani", "Betty", "Clara", "Dina", "Eva", "Flora", "Gina",
-    "Heni", "Ira", "Julie", "Anggun", "Aisyah", "Amanda", "Amelia", "Annisa", "Ayu", "Bunga",
-    "Cinta", "Devi", "Dinda", "Dini", "Dita", "Erna", "Farida", "Fatimah", "Feni", "Halimah",
-    "Intan", "Kartini", "Khadijah", "Laila", "Laras", "Lestari", "Lita", "Mala", "Maria", "Mega",
-    "Melati", "Melinda", "Murni", "Nabila", "Nadia", "Naila", "Nurul", "Puspita", "Rahma", "Ratih",
-    "Ratna", "Rindu", "Safitri", "Salma", "Sekar", "Sri", "Sulis", "Susi", "Tari", "Triana",
-    "Utami", "Vina", "Winda", "Yanti", "Yulia", "Zahra", "Zulfa", "Ade", "Adinda", "Aida",
-    "Alya", "Ambar", "Ananda", "Anita", "Arum", "Asih", "Asti", "Atika", "Azizah", "Cahaya",
-    "Cempaka", "Dahlia", "Dara", "Delia", "Diah", "Diana", "Diandra", "Elya", "Eni", "Erni",
-    "Euis", "Farah", "Fatin", "Fauziah", "Feny", "Fitria", "Gadis", "Galuh",
-    "Gendis", "Ghea", "Hanna", "Hilda", "Hilya", "Ica", "Ida", "Ilmi", "Ina", "Indri",
-    "Irene", "Irma", "Ismi", "Ita", "Ivana", "Jamilah", "Jannah", "Jayanti", "Jelita", "Jeni",
-    "Julianti", "Junita", "Kania", "Karina", "Kasih", "Keisha", "Kiki", "Kinasih", "Kinanti", "Kirana",
-    "Laksmi", "Larasati", "Leni", "Lidya", "Lili", "Lisa", "Lola", "Lulu", "Lusi", "Maharani",
-    "Manda", "Marisa", "Marta", "Mayang", "Meilani", "Melisa", "Mentari", "Mery", "Mila", "Mita",
-    "Mulia", "Mutiara", "Nadhira", "Nadine", "Nafisa", "Nani", "Nastiti", "Natasya", "Nayla", "Nia",
-    "Nila", "Ningrum", "Ningsih", "Nisa", "Nita", "Noor", "Novi", "Nuri", "Nurma", "Olivia",
-    "Paramita", "Permatasari", "Pertiwi", "Poppy", "Prita", "Puji", "Puspa", "Puteri", "Rahayu", "Rahmi",
-    "Rara", "Ratu", "Reni", "Restu", "Retno", "Ria", "Riani", "Rika", "Rini", "Rita",
-    "Rizka", "Rosi", "Rossa", "Sabila", "Salsabila", "Santi", "Sarah", "Sarinah", "Selvi", "Serena",
-    "Shafira", "Shinta", "Silvia", "Siti", "Sofi", "Srikandi", "Sumiati", "Susanti", "Syifa", "Talitha",
-    "Tania", "Tara", "Tasya", "Tati", "Tia", "Tika", "Tini", "Tirta", "Titi", "Tri",
-    "Tuti", "Uci", "Ulfa", "Ulya", "Umi", "Utari", "Vania", "Vera", "Veronica", "Vira",
-    "Vita", "Vivi", "Wafiq", "Wanda", "Wati", "Weni", "Widia", "Wulan", "Yani", "Yasmin",
-    "Yeni", "Yessica", "Yohana", "Yona", "Yuli", "Yunita", "Yusnita", "Zahwa", "Zainab", "Zakia",
-    "Zalfa", "Zaskia", "Zubaidah", "Zulaikha",
-]
+_NAME_SOURCE = os.path.join(SCRIPT_DIR, "names.json")
+
+def _load_name_pools():
+    """Load first/last name pools from names.json (unik-nama data source)."""
+    with open(_NAME_SOURCE) as f:
+        data = json.load(f)
+
+    def clean(items):
+        seen, out = set(), []
+        for item in items:
+            item = item.strip().title()
+            if len(item) < 3 or not all(c.isalpha() or c.isspace() for c in item):
+                continue
+            key = item.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(item)
+        return out
+
+    return clean(data.get("first_names", [])), clean(data.get("last_names", []))
+
+FIRST_NAMES, LAST_NAMES = _load_name_pools()
 
 MIDDLE_NAMES = [
     "Maulana", "Ramadhan", "Pratama", "Saputra", "Nugraha", "Prasetyo", "Kurniawan", "Setiawan",
@@ -159,25 +128,6 @@ MIDDLE_NAMES = [
     "Raka", "Satria", "Tama", "Wira", "Yudha", "Zaki", "Ardhi", "Bagaskara", "Cakra", "Daru",
     "Eshan", "Fajar", "Genta", "Hendra", "Irawan", "Jatmiko", "Kirana", "Lazuardi", "Manggala", "Narendra",
     "Oka", "Prameswara", "Rahardian", "Surya", "Tirta", "Umar", "Veda", "Wicaksana", "Yusuf", "Azhari",
-]
-
-LAST_NAMES = [
-    "Pratama", "Wijaya", "Santoso", "Hidayat", "Kurniawan", "Saputra", "Permata", "Lestari", "Nugroho", "Susanto",
-    "Wibowo", "Handayani", "Kusuma", "Rahman", "Setiawan", "Surya", "Purnama", "Sari", "Dewi", "Anggraini",
-    "Firmansyah", "Hakim", "Iskandar", "Jaya", "Kartika", "Lesmana", "Mahendra", "Nugraha", "Oktavia", "Prasetyo",
-    "Ramadhan", "Salim", "Tamara", "Utama", "Valentina", "Wulandari", "Yuliana", "Zubaidi", "Arifin", "Bahar",
-    "Cahyono", "Darmawan", "Effendi", "Gunawan", "Hartono", "Irawan", "Julianto", "Kurniadi", "Laksono", "Maulana",
-    "Nainggolan", "Oktaviano", "Prabowo", "Rizaldi", "Saputro", "Tjahjadi", "Utomo", "Virgianti", "Wicaksono", "Yudhistira",
-    "Abdullah", "Bagaskara", "Cakrawala", "Dhanu", "Elang", "Firmanda", "Ghani", "Hermawan", "Ibrahim", "Junaedi",
-    "Aditya", "Anggara", "Ardiansyah", "Ariyanto", "Asmoro", "Basuki", "Budiman", "Cahyadi", "Darmawan", "Fauzi",
-    "Firdaus", "Gunarto", "Hadi", "Halim", "Harahap", "Hariyanto", "Hasibuan", "Hutapea", "Ilham", "Juliansyah",
-    "Kamal", "Kartono", "Kurnia", "Kusnadi", "Laksana", "Lukman", "Marbun", "Marpaung", "Mulyadi", "Mustofa",
-    "Nasution", "Natawijaya", "Nurhadi", "Nursalim", "Panggabean", "Pangestu", "Prayitno", "Purnomo", "Putranto", "Rachman",
-    "Rahardjo", "Rahmawan", "Rusdianto", "Saputra", "Sasmito", "Setiabudi", "Siahaan", "Simanjuntak", "Sinaga",
-    "Siregar", "Situmorang", "Sudrajat", "Suhartono", "Sukma", "Sumantri", "Supriyadi", "Suryadi", "Sutanto", "Syahputra",
-    "Tambunan", "Tanuwijaya", "Tarigan", "Wardhana", "Widyanto", "Winata", "Yusuf", "Zulkarnaen", "Azhari",
-    "Chaerul", "Darmadi", "Erlangga", "Febriansyah", "Ginting", "Halomoan", "Handoko", "Iskandar", "Kusumo", "Lubis",
-    "Mangunsong", "Napitupulu", "Pamungkas", "Perdana", "Rajagukguk", "Ritonga", "Samosir", "Sitompul", "Suhendra", "Suryanto",
 ]
 
 def _claim_first_name():

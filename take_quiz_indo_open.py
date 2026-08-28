@@ -821,7 +821,7 @@ async def run_once(browser, run_num):
         await page.wait_for_timeout(3000)
         log(f"[Step 5] Current URL: {page.url}")
 
-        max_attempts = random.randint(1, 3)
+        max_attempts = random.randint(1, 2)
         log(f"[Quiz] This identity will play {max_attempts} attempt(s).")
         attempt = 0
         while True:

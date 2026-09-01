@@ -16,6 +16,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
 from datetime import datetime
 from patchright.async_api import async_playwright
 
@@ -39,9 +40,9 @@ BASE_URL = "https://geniusmath.techconnect.co.id/c/indonesiaopen"
 CFMAIL_API = "https://cfmail.solution.qzz.io/api"
 CFMAIL_DOMAIN = "kvc.my.id"
 
-# Captcha solver (2captcha — accepts card/PayPal) — set CAPTCHA_API_KEY in env
-CAPTCHA_API_KEY = os.environ.get("CAPTCHA_API_KEY", "")
-CAPTCHA_ENDPOINT = os.environ.get("CAPTCHA_ENDPOINT", "https://api.2captcha.com")
+# Captcha solver — SolveGate API (https://solvegate.io)
+SOLVEGATE_API_KEY = os.environ.get("SOLVEGATE_API_KEY", "")
+SOLVEGATE_ENDPOINT = os.environ.get("SOLVEGATE_ENDPOINT", "https://api.solvegate.io/v1")
 TURNSTILE_SITEKEY = "0x4AAAAAAEYhltGARvbbIjE4"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, "results_indo_open", datetime.now().strftime("%Y-%m-%d"))
@@ -275,57 +276,54 @@ def random_phone():
     prefixes = ["0812", "0813", "0821", "0822", "0852", "0853", "0856", "0857", "0878", "0895", "0896"]
     return f"{random.choice(prefixes)}{''.join(random.choices(string.digits, k=8))}"
 
+def _load_solvegate_key():
+    """Load the SolveGate API key from env, falling back to the .secret file."""
+    key = os.environ.get("SOLVEGATE_API_KEY", "")
+    if key:
+        return key
+    for p in (os.path.join(SCRIPT_DIR, ".secret"), os.path.join(os.path.dirname(SCRIPT_DIR), ".secret")):
+        try:
+            with open(p) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("solvegate_key="):
+                        return line.split("=", 1)[1]
+        except OSError:
+            continue
+    return ""
+
+
 def solve_turnstile():
-    """Solve the Turnstile via 2captcha and return the cf-turnstile-response token."""
-    if not CAPTCHA_API_KEY:
-        log(f"[2captcha] No API key set (CAPTCHA_API_KEY), skipping solver.")
+    """Solve the Turnstile via the SolveGate API and return the token."""
+    key = _load_solvegate_key()
+    if not key:
+        log(f"[SolveGate] No API key set (SOLVEGATE_API_KEY or solvegate_key in .secret), skipping solver.")
         return None
     try:
-        task_payload = {
-            "clientKey": CAPTCHA_API_KEY,
-            "task": {
-                "type": "TurnstileTaskProxyless",
-                "websiteURL": BASE_URL,
-                "websiteKey": TURNSTILE_SITEKEY,
-            },
+        payload = {
+            "gate": "turnstile",
+            "sitekey": TURNSTILE_SITEKEY,
+            "url": BASE_URL,
         }
         req = urllib.request.Request(
-            f"{CAPTCHA_ENDPOINT}/createTask",
-            data=json.dumps(task_payload).encode(),
-            headers={"Content-Type": "application/json"},
+            f"{SOLVEGATE_ENDPOINT}/solve",
+            data=json.dumps(payload).encode(),
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             d = json.loads(resp.read().decode())
-        if d.get("errorId", 1) != 0:
-            log(f"[2captcha] createTask error: {d.get('errorDescription', d)}")
+        if d.get("status") != "solved":
+            log(f"[SolveGate] Solve error: {d}")
             return None
-        task_id = d["taskId"]
-        log(f"[2captcha] Task created: {task_id}")
-
-        # Poll getTaskResult
-        for _ in range(40):
-            time.sleep(3)
-            r_req = urllib.request.Request(
-                f"{CAPTCHA_ENDPOINT}/getTaskResult",
-                data=json.dumps({"clientKey": CAPTCHA_API_KEY, "taskId": task_id}).encode(),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(r_req, timeout=20) as resp:
-                r = json.loads(resp.read().decode())
-            if r.get("errorId", 1) != 0:
-                log(f"[2captcha] getTaskResult error: {r.get('errorDescription', r)}")
-                return None
-            if r.get("status") == "ready":
-                token = r.get("solution", {}).get("token", "")
-                log(f"[2captcha] Token received ({len(token)} chars)")
-                return token
-
-        log(f"[2captcha] Timed out waiting for token")
-        return None
+        token = d.get("token", "")
+        log(f"[SolveGate] Token received ({len(token)} chars)")
+        return token
     except Exception as e:
-        log(f"[2captcha] API failed: {e}")
+        log(f"[SolveGate] API failed: {e}")
         return None
 
 
@@ -388,15 +386,15 @@ async def inject_turnstile_token(page, token):
     """
     try:
         await page.evaluate(js, token)
-        log(f"[2captcha] Token injected into form")
+        log(f"[SolveGate] Token injected into form")
         return True
     except Exception as e:
-        log(f"[2captcha] Token injection failed: {e}")
+        log(f"[SolveGate] Token injection failed: {e}")
         return False
 
 
 async def handle_cloudflare_turnstile(page, timeout=25000):
-    """Solve Cloudflare Turnstile — 2captcha solver first, then click-and-wait fallback.
+    """Solve Cloudflare Turnstile — local SolveGate first, then click-and-wait fallback.
 
     The widget is a checkbox ("Verify you are human"). We click it (inside the
     cross-origin iframe) and then wait for the cf-turnstile-response token, the
@@ -409,12 +407,12 @@ async def handle_cloudflare_turnstile(page, timeout=25000):
             log(f"[Cloudflare] No Turnstile challenge detected, skipping...")
             return True
 
-        # Primary path: solve via 2captcha API and inject the token
+        # Primary path: solve via local SolveGate API and inject the token
         token = solve_turnstile()
         if token:
             ok = await inject_turnstile_token(page, token)
             if ok:
-                log(f"[Cloudflare] Turnstile solved via 2captcha")
+                log(f"[Cloudflare] Turnstile solved via SolveGate")
                 return True
 
         log(f"[Cloudflare] Solver unavailable, falling back to click-and-wait...")
@@ -784,13 +782,13 @@ async def run_once(browser, run_num):
             await interested_labels.nth(idx).click()
             log(f"[Step 3] Selected c-interested option #{idx}")
 
-        # Step 3.5: Solve Cloudflare Turnstile via 2captcha
-        log(f"[Step 3.5] Solving Cloudflare Turnstile via 2captcha...")
+        # Step 3.5: Solve Cloudflare Turnstile via local SolveGate API
+        log(f"[Step 3.5] Solving Cloudflare Turnstile via local SolveGate...")
         token = solve_turnstile()
         if token:
             log(f"[Step 3.5] Token received ({len(token)} chars)")
         else:
-            log(f"[Step 3.5] WARNING: no token from 2captcha, submit may fail")
+            log(f"[Step 3.5] WARNING: no token from SolveGate, submit may fail")
 
         # Step 4: Submit entry directly to the backend (bypasses the React-gated button)
         log(f"[Step 4] Posting entry directly to /api/c/indonesiaopen/enter...")

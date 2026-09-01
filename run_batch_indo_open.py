@@ -44,11 +44,8 @@ class _Tee:
             s.flush()
 
 
-def _load_captcha_key():
-    key = os.environ.get("CAPTCHA_API_KEY", "")
-    if key:
-        return key
-    key = os.environ.get("2CAPTCHA_KEY", "")
+def _load_solvegate_key():
+    key = os.environ.get("SOLVEGATE_API_KEY", "")
     if key:
         return key
     for p in (os.path.join(SCRIPT_DIR, ".secret"), os.path.join(SCRIPT_DIR, "..", ".secret")):
@@ -56,7 +53,7 @@ def _load_captcha_key():
             with open(p) as f:
                 for line in f:
                     line = line.strip()
-                    if line.startswith("2captcha_key="):
+                    if line.startswith("solvegate_key="):
                         return line.split("=", 1)[1]
         except OSError:
             continue
@@ -67,8 +64,8 @@ async def run_instance(instance_id):
     """Run a single instance of take_quiz_indo_open.py."""
     env = dict(os.environ)
     env.setdefault("DISPLAY", ":99")
-    if not env.get("CAPTCHA_API_KEY"):
-        env["CAPTCHA_API_KEY"] = _load_captcha_key()
+    if not env.get("SOLVEGATE_API_KEY"):
+        env["SOLVEGATE_API_KEY"] = _load_solvegate_key()
     proc = await asyncio.create_subprocess_exec(
         sys.executable, os.path.join(SCRIPT_DIR, "take_quiz_indo_open.py"),
         "--instance", str(instance_id),

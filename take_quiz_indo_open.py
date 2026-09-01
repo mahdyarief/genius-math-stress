@@ -52,10 +52,12 @@ TOTAL_RUNS = 1
 parser = argparse.ArgumentParser()
 parser.add_argument("--instance", type=int, default=0, help="Instance number for parallel runs")
 parser.add_argument("--output-dir", type=str, default=None, help="Override output directory for screenshots")
+parser.add_argument("--email-domain", type=str, default=None, help="Static email domain (e.g. gmail.com) instead of random cfmail domains")
 args, _ = parser.parse_known_args()
 INSTANCE_ID = args.instance
 if args.output_dir:
     OUTPUT_DIR = args.output_dir
+EMAIL_DOMAIN = getattr(args, "email_domain", None) or os.environ.get("EMAIL_DOMAIN", "") or None
 LOG_FILE = os.path.join(SCRIPT_DIR, f"quiz_log_{INSTANCE_ID:02d}.txt" if INSTANCE_ID else "quiz_log.txt")
 
 def log(msg):
@@ -234,8 +236,18 @@ def _claim_domain(domains):
             pass
 
 
-def create_cfmail_email(name):
-    """Create a real disposable email via cfmail API with a random available domain."""
+def create_cfmail_email(name, static_domain=None):
+    """Create a disposable email — static domain if given, else cfmail API."""
+    clean = name.lower().replace(" ", "").replace(".", "")
+    num = random.randint(1, 9999)
+    address = f"{clean}{num}"
+
+    if static_domain:
+        email = f"{address}@{static_domain}"
+        log(f"[email] Static domain: {static_domain}")
+        log(f"[email] Generated email: {email}")
+        return email, None
+
     try:
         # Step 1: Create session
         req = urllib.request.Request(f"{CFMAIL_API}/session", method="GET")
@@ -248,10 +260,6 @@ def create_cfmail_email(name):
         domains = _fetch_available_domains()
         domain = _claim_domain(domains) or CFMAIL_DOMAIN
         log(f"[cfmail] Using domain: {domain}")
-
-        clean = name.lower().replace(" ", "").replace(".", "")
-        num = random.randint(1, 9999)
-        address = f"{clean}{num}"
 
         req = urllib.request.Request(
             f"{CFMAIL_API}/inboxes",
@@ -710,11 +718,11 @@ async def run_once(browser, run_num):
 
         # Step 3: Generate & fill form
         test_name = random_name()
-        test_email, cfmail_session = create_cfmail_email(test_name)
+        test_email, cfmail_session = create_cfmail_email(test_name, EMAIL_DOMAIN)
         test_username = test_email.split("@")[0] if test_email else ""
         test_domain = test_email.split("@")[1] if test_email and "@" in test_email else ""
         if not test_email:
-            log(f"[Step 3] ERROR: Failed to create cfmail email, skipping run")
+            log(f"[Step 3] ERROR: Failed to create email, skipping run")
             await save_error_screenshot(page, test_name, "step3_noemail")
             return False
         test_phone = random_phone()
@@ -722,7 +730,8 @@ async def run_once(browser, run_num):
         log(f"         Name:    {test_name}")
         log(f"         Email:   {test_email}")
         log(f"         Phone:   {test_phone}")
-        log(f"         Session: {cfmail_session[:8]}...")
+        if cfmail_session:
+            log(f"         Session: {cfmail_session[:8]}...")
 
         log(f"[Step 3] Filling name field (#c-name)...")
         await page.fill("#c-name", test_name)

@@ -88,11 +88,18 @@ Start-Process -WindowStyle Hidden -FilePath ".\.venv\Scripts\python.exe" -Argume
 | `--target` | 14300 | Total successful runs to reach |
 | `--parallel` | 5 | Instances running at once per batch (10 is fine) |
 | `--duration` | 0 | Max runtime in hours (0 = run until target reached) |
+| `--email-domain` | (empty) | Use a fixed email domain (e.g. `gmail.com`) instead of random cfmail domains; leave unset to keep using cfmail tempmail |
 
 Example: 6679 runs at parallel 10:
 
 ```bash
 ./run.sh --target 6679 --parallel 10
+```
+
+Example: same, but with a static `@gmail.com` email domain:
+
+```bash
+./run.sh --target 6679 --parallel 10 --email-domain gmail.com
 ```
 
 ## Output

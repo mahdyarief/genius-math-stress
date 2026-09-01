@@ -60,12 +60,17 @@ def _load_solvegate_key():
     return ""
 
 
+EMAIL_DOMAIN = None  # set from --email-domain in main()
+
+
 async def run_instance(instance_id):
     """Run a single instance of take_quiz_indo_open.py."""
     env = dict(os.environ)
     env.setdefault("DISPLAY", ":99")
     if not env.get("SOLVEGATE_API_KEY"):
         env["SOLVEGATE_API_KEY"] = _load_solvegate_key()
+    if EMAIL_DOMAIN:
+        env["EMAIL_DOMAIN"] = EMAIL_DOMAIN
     proc = await asyncio.create_subprocess_exec(
         sys.executable, os.path.join(SCRIPT_DIR, "take_quiz_indo_open.py"),
         "--instance", str(instance_id),
@@ -99,7 +104,10 @@ async def main():
     parser.add_argument("--target", type=int, default=14300, help="Total runs target (default: 14300 = 100K/week)")
     parser.add_argument("--parallel", type=int, default=5, help="Parallel instances per batch (default: 5, safe for long-running)")
     parser.add_argument("--duration", type=float, default=0, help="Max duration in hours (0 = run until target reached)")
+    parser.add_argument("--email-domain", type=str, default=None, help="Static email domain (e.g. gmail.com) instead of random cfmail domains")
     args = parser.parse_args()
+    global EMAIL_DOMAIN
+    EMAIL_DOMAIN = args.email_domain
 
     # Auto-generate batch_output_<target>.log (tee: console + file), so no
     # manual `> batch_output_N.log 2>&1` redirect is needed.

@@ -130,7 +130,10 @@ async def run_batch(batch_num, parallel_count, counter):
     ts = datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] Batch #{batch_num}: launching {parallel_count} instances...")
 
-    tasks = [run_instance(i + 1) for i in range(parallel_count)]
+    tasks = []
+    for i in range(parallel_count):
+        tasks.append(asyncio.create_task(run_instance(i + 1)))
+        await asyncio.sleep(1.5)  # stagger: 1.5s between each instance launch
     results = await asyncio.gather(*tasks)
 
     success = sum(1 for r in results if r)

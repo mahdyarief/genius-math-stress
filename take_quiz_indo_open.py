@@ -829,7 +829,8 @@ async def run_once(browser, run_num):
             if result.get("ok"):
                 break
             log(f"[Step 4] Attempt {attempt} rejected: {result}")
-            await page.wait_for_timeout(2000)
+            backoff = [2000, 5000, 10000][attempt - 1]
+            await page.wait_for_timeout(backoff)
         if not result.get("ok"):
             log(f"[Step 4] ERROR: entry rejected after retries: {result}")
             await save_error_screenshot(page, test_username, "step4_rejected")

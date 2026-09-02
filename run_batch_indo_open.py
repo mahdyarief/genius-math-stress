@@ -71,6 +71,7 @@ async def run_instance(instance_id):
         env["SOLVEGATE_API_KEY"] = _load_solvegate_key()
     if EMAIL_DOMAIN:
         env["EMAIL_DOMAIN"] = EMAIL_DOMAIN
+    t0 = time.time()
     proc = await asyncio.create_subprocess_exec(
         sys.executable, os.path.join(SCRIPT_DIR, "take_quiz_indo_open.py"),
         "--instance", str(instance_id),
@@ -81,7 +82,34 @@ async def run_instance(instance_id):
         env=env,
     )
     stdout, stderr = await proc.communicate()
-    return proc.returncode == 0
+    elapsed = time.time() - t0
+    ok = proc.returncode == 0
+
+    out_text = stdout.decode("utf-8", errors="replace").strip()
+    err_text = stderr.decode("utf-8", errors="replace").strip()
+
+    # Always log a one-line summary per instance
+    ts = datetime.now().strftime("%H:%M:%S")
+    if ok:
+        print(f"[{ts}]   Instance #{instance_id}: OK ({elapsed:.0f}s)")
+    else:
+        print(f"[{ts}]   Instance #{instance_id}: FAILED ({elapsed:.0f}s, exit={proc.returncode})")
+        # Print last 10 lines of stdout to show the error
+        if out_text:
+            lines = out_text.split("\n")
+            tail = lines[-10:] if len(lines) > 10 else lines
+            for line in tail:
+                stripped = line.strip()
+                if stripped:
+                    print(f"[{ts}]     | {stripped}")
+        if err_text:
+            print(f"[{ts}]     STDERR:")
+            for line in err_text.strip().split("\n")[-10:]:
+                stripped = line.strip()
+                if stripped:
+                    print(f"[{ts}]     ! {stripped}")
+
+    return ok
 
 async def run_batch(batch_num, parallel_count, counter):
     """Run a batch of parallel instances."""

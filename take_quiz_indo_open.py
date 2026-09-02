@@ -718,6 +718,7 @@ async def run_once(browser, run_num):
 
         # Step 3: Generate & fill form
         test_name = random_name()
+        test_name_slug = test_name.replace(" ", "-")
         test_email, cfmail_session = create_cfmail_email(test_name, EMAIL_DOMAIN)
         test_username = test_email.split("@")[0] if test_email else ""
         test_domain = test_email.split("@")[1] if test_email and "@" in test_email else ""
@@ -884,7 +885,7 @@ async def run_once(browser, run_num):
         for line in visible_lines[:10]:
             log(f"[Step 7]   | {line}")
 
-        screenshot_path = os.path.join(OUTPUT_DIR, f"{test_username}_{test_domain}.png")
+        screenshot_path = os.path.join(OUTPUT_DIR, f"{test_name_slug}_{test_username}_{test_domain}.png")
         try:
             await page.screenshot(path=screenshot_path, full_page=True)
             log(f"[Step 7] Screenshot saved: {screenshot_path}")
@@ -911,7 +912,7 @@ async def run_once(browser, run_num):
         try:
             body = await page.inner_text("body")
             if "Kamu Sudah Selesai" in body or "TINGKAT KEJENIUSAN" in body or "Hasil Kamu" in body:
-                ss_path = os.path.join(OUTPUT_DIR, f"{test_username}_{test_domain}.png")
+                ss_path = os.path.join(OUTPUT_DIR, f"{test_name_slug}_{test_username}_{test_domain}.png")
                 await page.screenshot(path=ss_path, full_page=True)
                 log(f"[ERROR] Result page detected after exception; saved as normal screenshot: {ss_path}")
                 return True
@@ -921,7 +922,7 @@ async def run_once(browser, run_num):
         try:
             err_dir = os.path.join(OUTPUT_DIR, "errors")
             os.makedirs(err_dir, exist_ok=True)
-            err_ss = os.path.join(err_dir, f"{test_username}_{test_domain}_error.png")
+            err_ss = os.path.join(err_dir, f"{test_name_slug}_{test_username}_{test_domain}_error.png")
             await page.screenshot(path=err_ss, full_page=True)
             log(f"[ERROR] Error screenshot saved: {err_ss}")
         except:

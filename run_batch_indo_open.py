@@ -109,6 +109,20 @@ async def run_instance(instance_id):
                 if stripped:
                     print(f"[{ts}]     ! {stripped}")
 
+        # Print the tail of the instance's quiz log file — it holds the
+        # step-by-step reason for the failure, which stdout does not.
+        quiz_log = os.path.join(SCRIPT_DIR, f"quiz_log_{instance_id:02d}.txt")
+        try:
+            with open(quiz_log, encoding="utf-8") as f:
+                qlines = [l.rstrip() for l in f if l.strip()]
+            tail = qlines[-15:] if len(qlines) > 15 else qlines
+            if tail:
+                print(f"[{ts}]     Quiz log tail ({os.path.basename(quiz_log)}):")
+                for line in tail:
+                    print(f"[{ts}]       {line}")
+        except OSError:
+            print(f"[{ts}]     (no quiz log found at {quiz_log})")
+
     return ok
 
 async def run_batch(batch_num, parallel_count, counter):

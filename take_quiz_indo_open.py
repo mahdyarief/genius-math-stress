@@ -11,6 +11,7 @@ import json
 import os
 import random
 import re
+import ssl
 import string
 import sys
 import time
@@ -322,8 +323,25 @@ def solve_turnstile():
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            d = json.loads(resp.read().decode())
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                d = json.loads(resp.read().decode())
+        except Exception as e:
+            # Windows often misses the root cert that signed SolveGate's
+            # chain (CERTIFICATE_VERIFY_FAILED); retry once without
+            # verification so the captcha still gets solved.
+            if isinstance(e, ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(e).upper():
+                log(f"[SolveGate] Cert verify failed ({e}); retrying without verification")
+                try:
+                    ctx = ssl._create_unverified_context()
+                    with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+                        d = json.loads(resp.read().decode())
+                except Exception as e2:
+                    log(f"[SolveGate] API failed: {e2}")
+                    return None
+            else:
+                log(f"[SolveGate] API failed: {e}")
+                return None
         if d.get("status") != "solved":
             log(f"[SolveGate] Solve error: {d}")
             return None

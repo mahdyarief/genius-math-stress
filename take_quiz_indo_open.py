@@ -176,9 +176,11 @@ def _claim_first_name():
 
 def random_name():
     first = _claim_first_name()
-    middle = random.choice(MIDDLE_NAMES) if random.random() < 0.4 else None
     last = random.choice(LAST_NAMES)
-    return f"{first} {middle} {last}" if middle else f"{first} {last}"
+    # 2-4 word names: 0, 1, or 2 middle names between first and last
+    n_middle = random.choices((0, 1, 2), weights=(55, 30, 15))[0]
+    middles = random.sample(MIDDLE_NAMES, n_middle)
+    return " ".join((first, *middles, last))
 
 def _fetch_available_domains():
     """Fetch the list of available domains from the cfmail API."""

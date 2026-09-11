@@ -41,9 +41,30 @@ BASE_URL = "https://geniusmath.techconnect.co.id/c/indonesiaopen"
 CFMAIL_API = "https://cfmail.solution.qzz.io/api"
 CFMAIL_DOMAIN = "kvc.my.id"
 
-# Captcha solver — SolveGate API (https://solvegate.io)
-SOLVEGATE_API_KEY = os.environ.get("SOLVEGATE_API_KEY", "")
-SOLVEGATE_ENDPOINT = os.environ.get("SOLVEGATE_ENDPOINT", "https://api.solvegate.io/v1")
+# Captcha solver — generic provider config.
+# style "solvegate":  single-shot POST {endpoint}/solve with Bearer auth.
+# style "capmonster": task flow (createTask -> poll getTaskResult), clientKey in JSON body.
+#                     Shared by SolverCF, 2Captcha, CapSolver, CapMonster (all use TurnstileTask).
+SOLVER_PROVIDERS = {
+    "solvegate": {
+        "style": "solvegate",
+        "endpoint": "https://api.solvegate.io/v1",
+        "key_env": "SOLVEGATE_API_KEY",
+        "key_file": "solvegate_key",
+    },
+    "solvercf": {
+        "style": "capmonster",
+        "endpoint": "https://solvercf.com/token/extension",
+        "key_env": "SOLVERCF_API_KEY",
+        "key_file": "solvercf_key",
+    },
+    # Add more CapMonster-compatible providers here, e.g.:
+    # "twocaptcha": {"style": "capmonster", "endpoint": "https://api.2captcha.com",
+    #                "key_env": "TWOCAPTCHA_API_KEY", "key_file": "2captcha_key"},
+}
+# "auto" tries providers in SOLVER_PRIORITY order; a specific provider can be
+# forced via env SOLVER_PROVIDER or `solver_provider=` in .secret.
+SOLVER_PRIORITY = ["solvercf", "solvegate"]
 TURNSTILE_SITEKEY = "0x4AAAAAAEYhltGARvbbIjE4"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, "results_indo_open", datetime.now().strftime("%Y-%m-%d"))
@@ -287,72 +308,133 @@ def random_phone():
     prefixes = ["0812", "0813", "0821", "0822", "0852", "0853", "0856", "0857", "0878", "0895", "0896"]
     return f"{random.choice(prefixes)}{''.join(random.choices(string.digits, k=8))}"
 
-def _load_solvegate_key():
-    """Load the SolveGate API key from env, falling back to the .secret file."""
-    key = os.environ.get("SOLVEGATE_API_KEY", "")
-    if key:
-        return key
+def _secret_lines():
+    """Return key=value lines from .secret (project dir first, then parent)."""
     for p in (os.path.join(SCRIPT_DIR, ".secret"), os.path.join(os.path.dirname(SCRIPT_DIR), ".secret")):
         try:
-            with open(p) as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("solvegate_key="):
-                        return line.split("=", 1)[1]
+            with open(p, encoding="utf-8") as f:
+                return [l.strip() for l in f if "=" in l]
         except OSError:
             continue
+    return []
+
+
+def _load_key(key_env, key_file):
+    """Load a solver/API key from env, falling back to the .secret file."""
+    key = os.environ.get(key_env, "")
+    if key:
+        return key
+    for line in _secret_lines():
+        if line.startswith(f"{key_file}="):
+            return line.split("=", 1)[1]
     return ""
 
 
-def solve_turnstile():
-    """Solve the Turnstile via the SolveGate API and return the token."""
-    key = _load_solvegate_key()
-    if not key:
-        log(f"[SolveGate] No API key set (SOLVEGATE_API_KEY or solvegate_key in .secret), skipping solver.")
-        return None
+def _active_provider():
+    """Resolve the provider: env SOLVER_PROVIDER, then .secret solver_provider, then auto."""
+    p = os.environ.get("SOLVER_PROVIDER", "").strip().lower()
+    if p in SOLVER_PROVIDERS:
+        return p
+    for line in _secret_lines():
+        if line.startswith("solver_provider="):
+            p = line.split("=", 1)[1].strip().lower()
+            if p in SOLVER_PROVIDERS:
+                return p
+    return "auto"
+
+
+_BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
+
+def _http_post_json(url, payload, headers=None, timeout=30):
+    """POST JSON, sending a browser UA (Cloudflare-fronted APIs 403 the default Python-urllib UA),
+    retrying once without cert verification on SSL errors (Windows cert gaps)."""
+    hdrs = dict(headers or {"Content-Type": "application/json"})
+    hdrs.setdefault("Content-Type", "application/json")
+    hdrs.setdefault("User-Agent", _BROWSER_UA)
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers=hdrs,
+        method="POST",
+    )
     try:
-        payload = {
-            "gate": "turnstile",
-            "sitekey": TURNSTILE_SITEKEY,
-            "url": BASE_URL,
-        }
-        req = urllib.request.Request(
-            f"{SOLVEGATE_ENDPOINT}/solve",
-            data=json.dumps(payload).encode(),
-            headers={
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                d = json.loads(resp.read().decode())
-        except Exception as e:
-            # Windows often misses the root cert that signed SolveGate's
-            # chain (CERTIFICATE_VERIFY_FAILED); retry once without
-            # verification so the captcha still gets solved.
-            if isinstance(e, ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(e).upper():
-                log(f"[SolveGate] Cert verify failed ({e}); retrying without verification")
-                try:
-                    ctx = ssl._create_unverified_context()
-                    with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
-                        d = json.loads(resp.read().decode())
-                except Exception as e2:
-                    log(f"[SolveGate] API failed: {e2}")
-                    return None
-            else:
-                log(f"[SolveGate] API failed: {e}")
-                return None
-        if d.get("status") != "solved":
-            log(f"[SolveGate] Solve error: {d}")
-            return None
-        token = d.get("token", "")
-        log(f"[SolveGate] Token received ({len(token)} chars)")
-        return token
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
     except Exception as e:
-        log(f"[SolveGate] API failed: {e}")
+        if isinstance(e, ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(e).upper():
+            log(f"[solver] Cert verify failed ({e}); retrying without verification")
+            ctx = ssl._create_unverified_context()
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                return json.loads(resp.read().decode())
+        raise
+
+
+def _solve_capmonster(cfg):
+    """CapMonster-style task flow: createTask -> poll getTaskResult.
+    Used by SolverCF, 2Captcha, CapSolver, CapMonster (all speak TurnstileTask)."""
+    base = cfg["endpoint"]
+    key = cfg["key"]
+    create = _http_post_json(f"{base}/createTask", {
+        "clientKey": key,
+        "task": {"type": "TurnstileTask", "websiteUrl": BASE_URL, "websiteKey": TURNSTILE_SITEKEY},
+    })
+    if create.get("errorId", 0) != 0 or not create.get("taskId"):
+        log(f"[{cfg['name']}] createTask failed: {create}")
         return None
+    task_id = create["taskId"]
+    deadline = time.time() + 90
+    while time.time() < deadline:
+        result = _http_post_json(f"{base}/getTaskResult", {"clientKey": key, "taskId": task_id})
+        status = result.get("status", "")
+        if status in ("ready", "success"):
+            token = (result.get("solution") or {}).get("token", "")
+            if token:
+                log(f"[{cfg['name']}] Token received ({len(token)} chars)")
+                return token
+        elif status in ("failed", "expired", "error"):
+            log(f"[{cfg['name']}] Task {status}: {result}")
+            return None
+        time.sleep(2)
+    log(f"[{cfg['name']}] Task timed out after 90s")
+    return None
+
+
+def _solve_solvegate(cfg):
+    """SolveGate single-shot flow."""
+    payload = {"gate": "turnstile", "sitekey": TURNSTILE_SITEKEY, "url": BASE_URL}
+    d = _http_post_json(
+        f"{cfg['endpoint']}/solve",
+        payload,
+        headers={"Authorization": f"Bearer {cfg['key']}", "Content-Type": "application/json"},
+    )
+    if d.get("status") != "solved":
+        log(f"[SolveGate] Solve error: {d}")
+        return None
+    token = d.get("token", "")
+    log(f"[SolveGate] Token received ({len(token)} chars)")
+    return token
+
+
+def solve_turnstile():
+    """Solve the Turnstile via the configured provider(s). Auto = try SOLVER_PRIORITY in order."""
+    provider = _active_provider()
+    order = SOLVER_PRIORITY if provider == "auto" else [provider]
+    for name in order:
+        cfg = dict(SOLVER_PROVIDERS[name])
+        cfg["name"] = name
+        cfg["key"] = _load_key(cfg["key_env"], cfg["key_file"])
+        if not cfg["key"]:
+            log(f"[{name}] No API key set ({cfg['key_env']} or {cfg['key_file']} in .secret), skipping solver.")
+            continue
+        try:
+            token = _solve_capmonster(cfg) if cfg["style"] == "capmonster" else _solve_solvegate(cfg)
+        except Exception as e:
+            log(f"[{name}] API failed: {e}")
+            continue
+        if token:
+            return token
+    return None
 
 
 async def inject_turnstile_token(page, token):
@@ -422,7 +504,7 @@ async def inject_turnstile_token(page, token):
 
 
 async def handle_cloudflare_turnstile(page, timeout=25000):
-    """Solve Cloudflare Turnstile — local SolveGate first, then click-and-wait fallback.
+    """Solve Cloudflare Turnstile — configured solver first, then click-and-wait fallback.
 
     The widget is a checkbox ("Verify you are human"). We click it (inside the
     cross-origin iframe) and then wait for the cf-turnstile-response token, the
@@ -435,12 +517,12 @@ async def handle_cloudflare_turnstile(page, timeout=25000):
             log(f"[Cloudflare] No Turnstile challenge detected, skipping...")
             return True
 
-        # Primary path: solve via local SolveGate API and inject the token
+        # Primary path: solve via the configured solver API and inject the token
         token = solve_turnstile()
         if token:
             ok = await inject_turnstile_token(page, token)
             if ok:
-                log(f"[Cloudflare] Turnstile solved via SolveGate")
+                log(f"[Cloudflare] Turnstile solved via solver")
                 return True
 
         log(f"[Cloudflare] Solver unavailable, falling back to click-and-wait...")
@@ -812,13 +894,13 @@ async def run_once(browser, run_num):
             await interested_labels.nth(idx).click()
             log(f"[Step 3] Selected c-interested option #{idx}")
 
-        # Step 3.5: Solve Cloudflare Turnstile via local SolveGate API
-        log(f"[Step 3.5] Solving Cloudflare Turnstile via local SolveGate...")
+        # Step 3.5: Solve Cloudflare Turnstile via the configured solver
+        log(f"[Step 3.5] Solving Cloudflare Turnstile via the configured solver...")
         token = solve_turnstile()
         if token:
             log(f"[Step 3.5] Token received ({len(token)} chars)")
         else:
-            log(f"[Step 3.5] WARNING: no token from SolveGate, submit may fail")
+            log(f"[Step 3.5] WARNING: no token from solver, submit may fail")
 
         # Step 4: Submit entry directly to the backend (bypasses the React-gated button)
         log(f"[Step 4] Posting entry directly to /api/c/indonesiaopen/enter...")

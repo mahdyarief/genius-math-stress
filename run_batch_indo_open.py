@@ -44,20 +44,24 @@ class _Tee:
             s.flush()
 
 
-def _load_solvegate_key():
-    key = os.environ.get("SOLVEGATE_API_KEY", "")
-    if key:
-        return key
+def _load_secret_values():
+    """Read all key=value pairs from .secret (project dir first, then parent dir)."""
     for p in (os.path.join(SCRIPT_DIR, ".secret"), os.path.join(SCRIPT_DIR, "..", ".secret")):
         try:
-            with open(p) as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("solvegate_key="):
-                        return line.split("=", 1)[1]
+            with open(p, encoding="utf-8") as f:
+                return dict(line.strip().split("=", 1) for line in f if "=" in line)
         except OSError:
             continue
-    return ""
+    return {}
+
+
+# Solver keys to propagate to child instances: .secret key name -> env var name.
+# A provider is added here once and picked up by take_quiz_indo_open.py's generic
+# SOLVER_PROVIDERS config — no further wiring needed.
+SOLVER_KEY_ENV = {
+    "solvegate_key": "SOLVEGATE_API_KEY",
+    "solvercf_key": "SOLVERCF_API_KEY",
+}
 
 
 EMAIL_DOMAIN = None  # set from --email-domain in main()
@@ -67,8 +71,12 @@ async def run_instance(instance_id):
     """Run a single instance of take_quiz_indo_open.py."""
     env = dict(os.environ)
     env.setdefault("DISPLAY", ":99")
-    if not env.get("SOLVEGATE_API_KEY"):
-        env["SOLVEGATE_API_KEY"] = _load_solvegate_key()
+    secrets = _load_secret_values()
+    for key_file, key_env in SOLVER_KEY_ENV.items():
+        if not env.get(key_env):
+            env[key_env] = secrets.get(key_file, "")
+    if not env.get("SOLVER_PROVIDER") and secrets.get("solver_provider"):
+        env["SOLVER_PROVIDER"] = secrets["solver_provider"]
     if EMAIL_DOMAIN:
         env["EMAIL_DOMAIN"] = EMAIL_DOMAIN
     t0 = time.time()

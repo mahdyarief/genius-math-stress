@@ -24,3 +24,6 @@ name_pool_state.lock
 domain_pool_state.json
 domain_pool_state.json.tmp
 domain_pool_state.lock
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

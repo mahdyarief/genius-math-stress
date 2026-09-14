@@ -500,6 +500,7 @@ def solve_turnstile():
             continue
         for key in keys:
             cfg["key"] = key
+            log(f"[{name}] Trying key {_key_id(key)} ({len(all_keys)} key(s) configured)")
             try:
                 style = cfg["style"]
                 if style == "capmonster":
@@ -512,6 +513,7 @@ def solve_turnstile():
                 log(f"[{name}] API failed: {e}")
                 continue
             if token:
+                log(f"[{name}] Solved using key {_key_id(key)}")
                 return token
     return None
 

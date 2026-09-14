@@ -71,6 +71,7 @@ SOLVER_KEY_ENV = {
 # after topping a key back up.
 EXHAUSTED_KEY_IDS = set()
 _KEY_EXHAUSTED_RE = re.compile(r"SOLVER_KEY_EXHAUSTED=([0-9a-f]{12})")
+_KEY_USED_RE = re.compile(r"Solved using key ([0-9a-f]{12})")
 
 
 def _key_id(key):
@@ -144,7 +145,9 @@ async def run_instance(instance_id):
             print(f"[{ts}]   Solver key {kid} out of credit - retired for this run")
 
     if ok:
-        print(f"[{ts}]   Instance #{instance_id}: OK ({elapsed:.0f}s)")
+        used = _KEY_USED_RE.findall(out_text)
+        key_note = f" [key {used[-1]}]" if used else ""
+        print(f"[{ts}]   Instance #{instance_id}: OK ({elapsed:.0f}s){key_note}")
     else:
         print(f"[{ts}]   Instance #{instance_id}: FAILED ({elapsed:.0f}s, exit={proc.returncode})")
         # Print last 10 lines of stdout to show the error

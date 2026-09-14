@@ -6,7 +6,9 @@ Usage: python run_batch_indo_open.py --target 100000 --parallel 5 --duration 24
 
 import argparse
 import asyncio
+import hashlib
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -61,7 +63,41 @@ def _load_secret_values():
 SOLVER_KEY_ENV = {
     "solvegate_key": "SOLVEGATE_API_KEY",
     "solvercf_key": "SOLVERCF_API_KEY",
+    "nslsolver_key": "NSLSOLVER_API_KEY",
 }
+
+# Solver keys that reported "no balance", tracked across instances so a dead key
+# is not re-probed by every child. A restart clears this, which is what you want
+# after topping a key back up.
+EXHAUSTED_KEY_IDS = set()
+_KEY_EXHAUSTED_RE = re.compile(r"SOLVER_KEY_EXHAUSTED=([0-9a-f]{12})")
+
+
+def _key_id(key):
+    """Short fingerprint matching take_quiz_indo_open.py's marker (not reversible)."""
+    return hashlib.sha1(key.encode()).hexdigest()[:12]
+
+
+def _collect_keys(secrets, key_file):
+    """All keys for a provider: `<key_file>s=k1,k2` (multi) or legacy single `<key_file>=k`."""
+    plural = secrets.get(f"{key_file}s", "").strip()
+    if plural:
+        return [k.strip() for k in plural.split(",") if k.strip()]
+    single = secrets.get(key_file, "").strip()
+    return [single] if single else []
+
+
+def _solver_keys_remaining():
+    """Count usable (non-exhausted) solver keys across all providers."""
+    secrets = _load_secret_values()
+    total = 0
+    for key_file, key_env in SOLVER_KEY_ENV.items():
+        env_val = os.environ.get(key_env, "").strip()
+        if env_val:
+            total += len([k for k in env_val.split(",") if k.strip()])
+        else:
+            total += sum(1 for k in _collect_keys(secrets, key_file) if _key_id(k) not in EXHAUSTED_KEY_IDS)
+    return total
 
 
 EMAIL_DOMAIN = None  # set from --email-domain in main()
@@ -73,8 +109,10 @@ async def run_instance(instance_id):
     env.setdefault("DISPLAY", ":99")
     secrets = _load_secret_values()
     for key_file, key_env in SOLVER_KEY_ENV.items():
-        if not env.get(key_env):
-            env[key_env] = secrets.get(key_file, "")
+        if env.get(key_env):
+            continue
+        keys = [k for k in _collect_keys(secrets, key_file) if _key_id(k) not in EXHAUSTED_KEY_IDS]
+        env[key_env] = ",".join(keys)
     if not env.get("SOLVER_PROVIDER") and secrets.get("solver_provider"):
         env["SOLVER_PROVIDER"] = secrets["solver_provider"]
     if EMAIL_DOMAIN:
@@ -98,6 +136,13 @@ async def run_instance(instance_id):
 
     # Always log a one-line summary per instance
     ts = datetime.now().strftime("%H:%M:%S")
+
+    # Retire any key a child reported as out of credit, so later instances skip it.
+    for kid in _KEY_EXHAUSTED_RE.findall(out_text) + _KEY_EXHAUSTED_RE.findall(err_text):
+        if kid not in EXHAUSTED_KEY_IDS:
+            EXHAUSTED_KEY_IDS.add(kid)
+            print(f"[{ts}]   Solver key {kid} out of credit - retired for this run")
+
     if ok:
         print(f"[{ts}]   Instance #{instance_id}: OK ({elapsed:.0f}s)")
     else:
@@ -190,11 +235,20 @@ async def main():
     counter = {"total": 0, "success": 0, "target": args.target}
     batch_num = 0
     start_time = time.time()
+    stop_reason = None
 
     while counter["success"] < args.target:
         # Check duration limit
         if duration_limit and (time.time() - start_time) >= duration_limit:
             print(f"\n[Duration limit reached: {args.duration} hours]")
+            stop_reason = f"duration limit reached ({args.duration} hours)"
+            break
+
+        # Every solver key has been retired (out of credit): stop instead of
+        # burning through batches that cannot solve the Turnstile.
+        if _solver_keys_remaining() == 0:
+            print(f"\n[All solver keys are out of credit - stopping. Top up a key or add another in .secret, then rerun.]")
+            stop_reason = "all solver keys out of credit"
             break
 
         batch_num += 1
@@ -215,7 +269,7 @@ async def main():
     if counter["success"] >= args.target:
         print(f"  TARGET REACHED!")
     else:
-        print(f"  DURATION LIMIT REACHED")
+        print(f"  STOPPED: {stop_reason or 'duration limit reached'}")
     print(f"  Total success: {counter['success']:,}")
     print(f"  Total time: {elapsed:.0f}s ({elapsed/3600:.1f}h)")
     print(f"  Rate: {rate:.2f} runs/sec ({rate_per_hour:.0f} runs/hour)")

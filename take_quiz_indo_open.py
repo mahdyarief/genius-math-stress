@@ -7,6 +7,7 @@ Full logging at every step so nothing is blind.
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import random
@@ -45,6 +46,7 @@ CFMAIL_DOMAIN = "kvc.my.id"
 # style "solvegate":  single-shot POST {endpoint}/solve with Bearer auth.
 # style "capmonster": task flow (createTask -> poll getTaskResult), clientKey in JSON body.
 #                     Shared by SolverCF, 2Captcha, CapSolver, CapMonster (all use TurnstileTask).
+# style "nslsolver":  single-shot POST {endpoint}/solve with X-API-Key header.
 SOLVER_PROVIDERS = {
     "solvegate": {
         "style": "solvegate",
@@ -58,13 +60,19 @@ SOLVER_PROVIDERS = {
         "key_env": "SOLVERCF_API_KEY",
         "key_file": "solvercf_key",
     },
+    "nslsolver": {
+        "style": "nslsolver",
+        "endpoint": "https://api.nslsolver.com",
+        "key_env": "NSLSOLVER_API_KEY",
+        "key_file": "nslsolver_key",
+    },
     # Add more CapMonster-compatible providers here, e.g.:
     # "twocaptcha": {"style": "capmonster", "endpoint": "https://api.2captcha.com",
     #                "key_env": "TWOCAPTCHA_API_KEY", "key_file": "2captcha_key"},
 }
 # "auto" tries providers in SOLVER_PRIORITY order; a specific provider can be
 # forced via env SOLVER_PROVIDER or `solver_provider=` in .secret.
-SOLVER_PRIORITY = ["solvercf", "solvegate"]
+SOLVER_PRIORITY = ["solvercf", "nslsolver", "solvegate"]
 TURNSTILE_SITEKEY = "0x4AAAAAAEYhltGARvbbIjE4"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, "results_indo_open", datetime.now().strftime("%Y-%m-%d"))
@@ -319,15 +327,46 @@ def _secret_lines():
     return []
 
 
-def _load_key(key_env, key_file):
-    """Load a solver/API key from env, falling back to the .secret file."""
-    key = os.environ.get(key_env, "")
-    if key:
-        return key
+def _load_keys(key_env, key_file):
+    """Load all API keys for a provider: env (comma-separated), else .secret.
+
+    .secret accepts `<key_file>s=k1,k2,k3` (comma-separated, for multiple keys)
+    or the legacy single `<key_file>=k`. Order is preserved; duplicates drop.
+    """
+    raw = os.environ.get(key_env)
+    if raw is not None:
+        # Set-but-empty means the runner already filtered every key out; do not
+        # fall back to .secret, or we would re-probe a key it just retired.
+        return [k.strip() for k in raw.split(",") if k.strip()]
+    keys = []
     for line in _secret_lines():
-        if line.startswith(f"{key_file}="):
-            return line.split("=", 1)[1]
-    return ""
+        if line.startswith(f"{key_file}s="):
+            keys += [k.strip() for k in line.split("=", 1)[1].split(",") if k.strip()]
+        elif line.startswith(f"{key_file}="):
+            keys.append(line.split("=", 1)[1].strip())
+    return list(dict.fromkeys(k for k in keys if k))
+
+
+# Keys that reported "no balance" are retired for the rest of this run, so later
+# solve attempts go straight to the next key instead of re-probing a dead one.
+_exhausted_keys = set()
+
+
+def _key_id(key):
+    """Short stable fingerprint of a key (safe to log; not reversible)."""
+    return hashlib.sha1(key.encode()).hexdigest()[:12]
+
+
+def _is_balance_error(resp):
+    """True when a solver response means 'out of credit' rather than a transient error."""
+    text = json.dumps(resp).lower()
+    return ("balance" in text and "not enough" in text) or "insufficient" in text or "zero_balance" in text
+
+
+def _mark_exhausted(cfg, key):
+    kid = _key_id(key)
+    _exhausted_keys.add(kid)
+    log(f"[{cfg['name']}] SOLVER_KEY_EXHAUSTED={kid} (no balance) - switching to next key")
 
 
 def _active_provider():
@@ -381,6 +420,8 @@ def _solve_capmonster(cfg):
     })
     if create.get("errorId", 0) != 0 or not create.get("taskId"):
         log(f"[{cfg['name']}] createTask failed: {create}")
+        if _is_balance_error(create):
+            _mark_exhausted(cfg, key)
         return None
     task_id = create["taskId"]
     deadline = time.time() + 90
@@ -394,6 +435,8 @@ def _solve_capmonster(cfg):
                 return token
         elif status in ("failed", "expired", "error"):
             log(f"[{cfg['name']}] Task {status}: {result}")
+            if _is_balance_error(result):
+                _mark_exhausted(cfg, key)
             return None
         time.sleep(2)
     log(f"[{cfg['name']}] Task timed out after 90s")
@@ -410,30 +453,66 @@ def _solve_solvegate(cfg):
     )
     if d.get("status") != "solved":
         log(f"[SolveGate] Solve error: {d}")
+        if _is_balance_error(d):
+            _mark_exhausted(cfg, cfg["key"])
         return None
     token = d.get("token", "")
     log(f"[SolveGate] Token received ({len(token)} chars)")
     return token
 
 
+def _solve_nslsolver(cfg):
+    """NSLSolver single-shot flow (X-API-Key header, /solve endpoint)."""
+    payload = {"type": "turnstile", "site_key": TURNSTILE_SITEKEY, "url": BASE_URL}
+    d = _http_post_json(
+        f"{cfg['endpoint']}/solve",
+        payload,
+        headers={"X-API-Key": cfg["key"], "Content-Type": "application/json"},
+    )
+    if not d.get("success"):
+        log(f"[NSLSolver] Solve error: {d}")
+        if _is_balance_error(d):
+            _mark_exhausted(cfg, cfg["key"])
+        return None
+    token = d.get("token", "")
+    log(f"[NSLSolver] Token received ({len(token)} chars)")
+    return token
+
+
 def solve_turnstile():
-    """Solve the Turnstile via the configured provider(s). Auto = try SOLVER_PRIORITY in order."""
+    """Solve the Turnstile via the configured provider(s). Auto = try SOLVER_PRIORITY in order.
+
+    Within a provider, keys are tried in order; a key that reports no balance is
+    retired for the rest of this run and the next key is used immediately.
+    """
     provider = _active_provider()
     order = SOLVER_PRIORITY if provider == "auto" else [provider]
     for name in order:
         cfg = dict(SOLVER_PROVIDERS[name])
         cfg["name"] = name
-        cfg["key"] = _load_key(cfg["key_env"], cfg["key_file"])
-        if not cfg["key"]:
+        all_keys = _load_keys(cfg["key_env"], cfg["key_file"])
+        if not all_keys:
             log(f"[{name}] No API key set ({cfg['key_env']} or {cfg['key_file']} in .secret), skipping solver.")
             continue
-        try:
-            token = _solve_capmonster(cfg) if cfg["style"] == "capmonster" else _solve_solvegate(cfg)
-        except Exception as e:
-            log(f"[{name}] API failed: {e}")
+        keys = [k for k in all_keys if _key_id(k) not in _exhausted_keys]
+        if not keys:
+            log(f"[{name}] All {len(all_keys)} key(s) exhausted (no balance), skipping solver.")
             continue
-        if token:
-            return token
+        for key in keys:
+            cfg["key"] = key
+            try:
+                style = cfg["style"]
+                if style == "capmonster":
+                    token = _solve_capmonster(cfg)
+                elif style == "nslsolver":
+                    token = _solve_nslsolver(cfg)
+                else:
+                    token = _solve_solvegate(cfg)
+            except Exception as e:
+                log(f"[{name}] API failed: {e}")
+                continue
+            if token:
+                return token
     return None
 
 

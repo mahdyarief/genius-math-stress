@@ -20,7 +20,9 @@ Load-test harness for Genius Math Challenge (Indonesia Open) at `geniusmath.tech
 - **Headless default**: Turnstile solved externally via 2captcha, so headless is acceptable and saves CPU/RAM.
 - **Honest exit codes**: `main()` returns 0 if all runs succeed, 1 otherwise. Batch counts success via `proc.returncode == 0`.
 - **Screenshot filename**: Uses username only (e.g., `rezasusanto738.png`) not full email, to avoid filesystem issues with `@` in filenames on Windows.
+- **Multi-key solver rotation**: `.secret` takes `solvercf_keys=k1,k2` (comma-separated; legacy `solvercf_key=` still works). A key reporting "no balance" is retired for the run and the next key is tried. Cross-instance state works via a stdout marker `SOLVER_KEY_EXHAUSTED=<sha1[:12]>` that the batch runner scrapes and stores in `EXHAUSTED_KEY_IDS`, filtering dead keys from the env passed to later children; the runner aborts when every solver key is exhausted. Child treats a set-but-empty env var as "no keys" (no `.secret` fallback), which is how the runner signals a fully-retired provider.
 
 ## Recent Sessions
 
+- 2026-09-14: Added multi-SolverCF-key rotation with auto-failover on credit exhaustion (comma-separated `solvercf_keys`, SHA1 fingerprint markers, runner-level exhausted-key tracking and all-keys-dead abort guard). Verified offline (22 checks) and live against solvercf.com.
 - 2026-08-26: Batch 990 completed: 990/990 success in 2.3h (parallel 10, 422 runs/hour). Screenshot filenames changed from full email to username only.

@@ -584,12 +584,11 @@ async def inject_turnstile_token(page, token):
         return False
 
 
-async def handle_cloudflare_turnstile(page, timeout=25000):
-    """Solve Cloudflare Turnstile — configured solver first, then click-and-wait fallback.
+async def handle_cloudflare_turnstile(page):
+    """Solve Cloudflare Turnstile via the configured solver API, or abort.
 
-    The widget is a checkbox ("Verify you are human"). We click it (inside the
-    cross-origin iframe) and then wait for the cf-turnstile-response token, the
-    widget to disappear, or the submit button to enable.
+    There is no manual fallback: the widget cannot be passed by clicking, so a
+    missing token means the run cannot proceed.
     """
     try:
         frames = page.frames
@@ -606,73 +605,7 @@ async def handle_cloudflare_turnstile(page, timeout=25000):
                 log(f"[Cloudflare] Turnstile solved via solver")
                 return True
 
-        log(f"[Cloudflare] Solver unavailable, falling back to click-and-wait...")
-
-        # 1. Try clicking the checkbox inside the Turnstile iframe
-        clicked = False
-        for frame in frames:
-            if 'challenges.cloudflare.com' not in frame.url:
-                continue
-            for sel in ["input[type='checkbox']", "#challenge-stage", ".cb-i", "label", "body"]:
-                try:
-                    el = frame.locator(sel).first
-                    if await el.count() > 0:
-                        await el.click(timeout=5000)
-                        log(f"[Cloudflare] Clicked Turnstile via frame ({sel})")
-                        clicked = True
-                        break
-                except Exception:
-                    continue
-            if clicked:
-                break
-
-        # 2. Fallback: click the iframe element by coordinates (checkbox area)
-        if not clicked:
-            ts_el = page.locator("iframe[src*='challenges.cloudflare.com']").first
-            if await ts_el.count() > 0:
-                box = await ts_el.bounding_box()
-                if box:
-                    x = box['x'] + 25
-                    y = box['y'] + box['height'] / 2
-                    await page.mouse.click(x, y)
-                    log(f"[Cloudflare] Clicked Turnstile at ({x:.0f}, {y:.0f})")
-                    clicked = True
-
-        if not clicked:
-            log(f"[Cloudflare] WARNING: could not click Turnstile")
-            return False
-
-        # 3. Wait for token / widget gone / button enabled
-        start = time.time()
-        interval = 1000
-        while time.time() - start < timeout / 1000:
-            token_inputs = [
-                "input[name='cf-turnstile-response']",
-                "input[name='turnstile-token']",
-                "textarea[name='cf-turnstile-response']",
-            ]
-            for sel in token_inputs:
-                el = page.locator(sel).first
-                if await el.count() > 0:
-                    val = await el.get_attribute("value") or (await el.input_value() if await el.is_editable() else None)
-                    if val and len(val) > 10:
-                        log(f"[Cloudflare] Turnstile token received ({len(val)} chars)")
-                        return True
-
-            submit_btn = page.locator("button[type='submit']").first
-            if await submit_btn.count() > 0:
-                if not await submit_btn.is_disabled():
-                    log(f"[Cloudflare] Submit button enabled (Turnstile passed)")
-                    return True
-
-            current_frames = page.frames
-            if not any('challenges.cloudflare.com' in f.url for f in current_frames):
-                log(f"[Cloudflare] Turnstile challenge disposed (solved)")
-                return True
-
-            await page.wait_for_timeout(interval)
-
-        log(f"[Cloudflare] WARNING: Turnstile did not solve after {timeout//1000}s")
+        log(f"[Cloudflare] No solver token (no API key or all keys out of credit) - aborting, no manual solve.")
         return False
 
     except Exception as e:

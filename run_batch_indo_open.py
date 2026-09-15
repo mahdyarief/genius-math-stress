@@ -57,14 +57,15 @@ def _load_secret_values():
     return {}
 
 
-# Solver keys to propagate to child instances: .secret key name -> env var name.
-# A provider is added here once and picked up by take_quiz_indo_open.py's generic
-# SOLVER_PROVIDERS config — no further wiring needed.
-SOLVER_KEY_ENV = {
-    "solvegate_key": "SOLVEGATE_API_KEY",
-    "solvercf_key": "SOLVERCF_API_KEY",
-    "nslsolver_key": "NSLSOLVER_API_KEY",
+# Solver providers this runner propagates to child instances:
+# provider name -> (.secret key file, env var). Mirror of SOLVER_PROVIDERS in
+# take_quiz_indo_open.py; SOLVER_PRIORITY mirrors its try order.
+SOLVER_PROVIDERS = {
+    "solvegate": ("solvegate_key", "SOLVEGATE_API_KEY"),
+    "solvercf": ("solvercf_key", "SOLVERCF_API_KEY"),
+    "nslsolver": ("nslsolver_key", "NSLSOLVER_API_KEY"),
 }
+SOLVER_PRIORITY = ["solvercf", "nslsolver", "solvegate"]
 
 # Solver keys that reported "no balance", tracked across instances so a dead key
 # is not re-probed by every child. A restart clears this, which is what you want
@@ -88,17 +89,48 @@ def _collect_keys(secrets, key_file):
     return [single] if single else []
 
 
-def _solver_keys_remaining():
-    """Count usable (non-exhausted) solver keys across all providers."""
+def _active_solver_provider():
+    """Provider the child will use: SOLVER_PROVIDER env, then .secret, else "auto"."""
+    p = os.environ.get("SOLVER_PROVIDER", "").strip().lower()
+    if p in SOLVER_PROVIDERS:
+        return p
+    p = _load_secret_values().get("solver_provider", "").strip().lower()
+    return p if p in SOLVER_PROVIDERS else "auto"
+
+
+def _provider_keys(secrets, name):
+    """Configured keys for one provider. A set env var wins over .secret."""
+    key_file, key_env = SOLVER_PROVIDERS[name]
+    env_val = os.environ.get(key_env)
+    if env_val is not None:
+        # Set-but-empty means every key was already filtered out for the child.
+        return [k.strip() for k in env_val.split(",") if k.strip()]
+    return _collect_keys(secrets, key_file)
+
+
+def _solver_key_status():
+    """Return (configured, usable, other_usable) for the providers the child tries.
+
+    configured    keys present at all for the provider(s) that will be attempted
+    usable        those not yet retired for lack of credit
+    other_usable  usable keys on providers that will NOT be attempted (pinned
+                  provider is narrower than "auto")
+    """
     secrets = _load_secret_values()
-    total = 0
-    for key_file, key_env in SOLVER_KEY_ENV.items():
-        env_val = os.environ.get(key_env, "").strip()
-        if env_val:
-            total += len([k for k in env_val.split(",") if k.strip()])
-        else:
-            total += sum(1 for k in _collect_keys(secrets, key_file) if _key_id(k) not in EXHAUSTED_KEY_IDS)
-    return total
+    provider = _active_solver_provider()
+    order = SOLVER_PRIORITY if provider == "auto" else [provider]
+    configured = usable = 0
+    for name in order:
+        keys = _provider_keys(secrets, name)
+        configured += len(keys)
+        usable += sum(1 for k in keys if _key_id(k) not in EXHAUSTED_KEY_IDS)
+    other_usable = 0
+    for name in SOLVER_PROVIDERS:
+        if name in order:
+            continue
+        keys = _provider_keys(secrets, name)
+        other_usable += sum(1 for k in keys if _key_id(k) not in EXHAUSTED_KEY_IDS)
+    return configured, usable, other_usable
 
 
 EMAIL_DOMAIN = None  # set from --email-domain in main()
@@ -109,7 +141,7 @@ async def run_instance(instance_id):
     env = dict(os.environ)
     env.setdefault("DISPLAY", ":99")
     secrets = _load_secret_values()
-    for key_file, key_env in SOLVER_KEY_ENV.items():
+    for key_file, key_env in SOLVER_PROVIDERS.values():
         if env.get(key_env):
             continue
         keys = [k for k in _collect_keys(secrets, key_file) if _key_id(k) not in EXHAUSTED_KEY_IDS]
@@ -247,10 +279,19 @@ async def main():
             stop_reason = f"duration limit reached ({args.duration} hours)"
             break
 
-        # Every solver key has been retired (out of credit): stop instead of
-        # burning through batches that cannot solve the Turnstile.
-        if _solver_keys_remaining() == 0:
-            print(f"\n[All solver keys are out of credit - stopping. Top up a key or add another in .secret, then rerun.]")
+        # Stop when the Turnstile can no longer be solved at all: no key is
+        # configured (nothing to try) or every configured key is out of credit.
+        # Continuing just burns batches that all fail CAPTCHA.
+        configured, usable, other_usable = _solver_key_status()
+        provider = _active_solver_provider()
+        if configured == 0:
+            print(f"\n[No solver API key configured for provider '{provider}' - stopping. Add a key in .secret, then rerun.]")
+            stop_reason = f"no solver key configured for provider '{provider}'"
+            break
+        if usable == 0:
+            print(f"\n[All {provider} solver keys are out of credit - stopping. Top up a key or add another in .secret, then rerun.]")
+            if other_usable:
+                print(f"[Note: {other_usable} usable key(s) exist for other providers, but solver_provider={provider} pins this run to {provider}. Set solver_provider=auto in .secret to fail over.]")
             stop_reason = "all solver keys out of credit"
             break
 

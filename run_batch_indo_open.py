@@ -71,8 +71,8 @@ SOLVER_PRIORITY = ["solvercf", "nslsolver", "solvegate"]
 # is not re-probed by every child. A restart clears this, which is what you want
 # after topping a key back up.
 EXHAUSTED_KEY_IDS = set()
-_KEY_EXHAUSTED_RE = re.compile(r"SOLVER_KEY_EXHAUSTED=([0-9a-f]{12})")
-_KEY_USED_RE = re.compile(r"Solved using key ([0-9a-f]{12})")
+_KEY_EXHAUSTED_RE = re.compile(r"SOLVER_KEY_EXHAUSTED=([0-9a-f]{12})(?: \[([^\]]+)\])?")
+_KEY_USED_RE = re.compile(r"Solved using key ([0-9a-f]{12})(?: \[([^\]]+)\])?")
 
 
 def _key_id(key):
@@ -171,14 +171,20 @@ async def run_instance(instance_id):
     ts = datetime.now().strftime("%H:%M:%S")
 
     # Retire any key a child reported as out of credit, so later instances skip it.
-    for kid in _KEY_EXHAUSTED_RE.findall(out_text) + _KEY_EXHAUSTED_RE.findall(err_text):
+    for kid, label in _KEY_EXHAUSTED_RE.findall(out_text) + _KEY_EXHAUSTED_RE.findall(err_text):
         if kid not in EXHAUSTED_KEY_IDS:
             EXHAUSTED_KEY_IDS.add(kid)
-            print(f"[{ts}]   Solver key {kid} out of credit - retired for this run")
+            tag = f" [{label}]" if label else ""
+            print(f"[{ts}]   Solver key {kid}{tag} out of credit - retired for this run")
 
     if ok:
         used = _KEY_USED_RE.findall(out_text)
-        key_note = f" [key {used[-1]}]" if used else ""
+        if used:
+            kid, label = used[-1]
+            label_note = f" ({label})" if label else ""
+            key_note = f" [key {kid}{label_note}]"
+        else:
+            key_note = ""
         print(f"[{ts}]   Instance #{instance_id}: OK ({elapsed:.0f}s){key_note}")
     else:
         print(f"[{ts}]   Instance #{instance_id}: FAILED ({elapsed:.0f}s, exit={proc.returncode})")

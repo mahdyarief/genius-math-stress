@@ -415,6 +415,22 @@ def _key_id(key):
     return hashlib.sha1(key.encode()).hexdigest()[:12]
 
 
+def _key_label(key):
+    """Head of a key, so a log line can be traced to a .secret entry by eye.
+
+    Only returned for keys long enough that the visible part cannot be the
+    whole secret; a short key falls back to the fingerprint alone.
+    """
+    return key[:8] if len(key) >= 16 else None
+
+
+def _key_tag(key):
+    """Fingerprint for logs, plus the readable head when one is safe to show."""
+    kid = _key_id(key)
+    label = _key_label(key)
+    return f"{kid} [{label}]" if label else kid
+
+
 def _is_balance_error(resp):
     """True when a solver response means 'out of credit' rather than a transient error."""
     text = json.dumps(resp).lower()
@@ -424,7 +440,7 @@ def _is_balance_error(resp):
 def _mark_exhausted(cfg, key):
     kid = _key_id(key)
     _exhausted_keys.add(kid)
-    log(f"[{cfg['name']}] SOLVER_KEY_EXHAUSTED={kid} (no balance) - switching to next key")
+    log(f"[{cfg['name']}] SOLVER_KEY_EXHAUSTED={_key_tag(key)} (no balance) - switching to next key")
 
 
 def _active_provider():
@@ -558,7 +574,7 @@ def solve_turnstile():
             continue
         for key in keys:
             cfg["key"] = key
-            log(f"[{name}] Trying key {_key_id(key)} ({len(all_keys)} key(s) configured)")
+            log(f"[{name}] Trying key {_key_tag(key)} ({len(all_keys)} key(s) configured)")
             try:
                 style = cfg["style"]
                 if style == "capmonster":
@@ -571,7 +587,7 @@ def solve_turnstile():
                 log(f"[{name}] API failed: {e}")
                 continue
             if token:
-                log(f"[{name}] Solved using key {_key_id(key)}")
+                log(f"[{name}] Solved using key {_key_tag(key)}")
                 return token
     return None
 

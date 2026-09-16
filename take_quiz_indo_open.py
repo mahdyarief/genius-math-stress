@@ -13,7 +13,6 @@ import os
 import random
 import re
 import ssl
-import string
 import sys
 import time
 import urllib.request
@@ -137,6 +136,24 @@ _NAME_SOURCE = os.path.join(SCRIPT_DIR, "names.json")
 # until the pool is exhausted, then it reshuffles and cycles.
 _DOMAIN_STATE_FILE = os.path.join(SCRIPT_DIR, "domain_pool_state.json")
 _DOMAIN_LOCK_FILE = os.path.join(SCRIPT_DIR, "domain_pool_state.lock")
+
+# Persistent phone counter so parallel processes never repeat a number. Each
+# claim maps a counter step through a bijection over the whole number space, so
+# every number is fresh, spread across the space, and cannot repeat until all
+# ~990M are used -- far beyond any realistic batch size.
+_PHONE_STATE_FILE = os.path.join(SCRIPT_DIR, "phone_pool_state.json")
+_PHONE_LOCK_FILE = os.path.join(SCRIPT_DIR, "phone_pool_state.lock")
+_PHONE_PREFIXES = ["0812", "0813", "0821", "0822", "0852", "0853", "0856", "0857", "0878", "0895", "0896"]
+# Tail is 8 digits starting 1-9, i.e. 10,000,000..99,999,999 (valid mobile format).
+_PHONE_TAIL_BASE = 10_000_000
+_PHONE_TAIL_SPAN = 90_000_000
+# Prefixes x tails = ~990M distinct numbers; the index -> number map is a
+# bijection, so distinct counters always give distinct numbers.
+_PHONE_SPACE = len(_PHONE_PREFIXES) * _PHONE_TAIL_SPAN
+# Multiplier stays coprime with _PHONE_SPACE (no factor 2, 3, 5 or 11), which
+# makes the counter permutation below a bijection and scrambles its order.
+_PHONE_MULT = 1_000_003
+_PHONE_OFFSET = 20_260_916
 
 def _load_name_pools():
     """Load first/last name pools from names.json (unik-nama data source)."""
@@ -312,9 +329,45 @@ def create_cfmail_email(name, static_domain=None):
 
     return None, None
 
+def _phone_from_index(n):
+    """Map a counter step to a phone number; distinct steps give distinct numbers."""
+    v = (_PHONE_MULT * n + _PHONE_OFFSET) % _PHONE_SPACE
+    n_prefix = len(_PHONE_PREFIXES)
+    return f"{_PHONE_PREFIXES[v % n_prefix]}{_PHONE_TAIL_BASE + v // n_prefix}"
+
+
+def _random_phone_number():
+    return f"{random.choice(_PHONE_PREFIXES)}{random.randint(_PHONE_TAIL_BASE, _PHONE_TAIL_BASE + _PHONE_TAIL_SPAN - 1)}"
+
+
 def random_phone():
-    prefixes = ["0812", "0813", "0821", "0822", "0852", "0853", "0856", "0857", "0878", "0895", "0896"]
-    return f"{random.choice(prefixes)}{''.join(random.choices(string.digits, k=8))}"
+    """Claim a unique phone number, no repeats across parallel processes."""
+    for _ in range(100):
+        try:
+            fd = os.open(_PHONE_LOCK_FILE, os.O_CREAT | os.O_EXCL)
+            os.close(fd)
+            break
+        except FileExistsError:
+            time.sleep(0.1)
+    else:
+        # Lock never freed; take a fresh random number rather than stalling.
+        return _random_phone_number()
+    try:
+        n = 0
+        if os.path.exists(_PHONE_STATE_FILE):
+            with open(_PHONE_STATE_FILE) as f:
+                n = json.load(f)["n"]
+        phone = _phone_from_index(n)
+        tmp = _PHONE_STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"n": n + 1}, f)
+        os.replace(tmp, _PHONE_STATE_FILE)
+        return phone
+    finally:
+        try:
+            os.unlink(_PHONE_LOCK_FILE)
+        except FileNotFoundError:
+            pass
 
 def _secret_lines():
     """Return key=value lines from .secret (project dir first, then parent)."""

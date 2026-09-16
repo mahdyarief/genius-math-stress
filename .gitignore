@@ -25,5 +25,10 @@ domain_pool_state.json
 domain_pool_state.json.tmp
 domain_pool_state.lock
 
+# Phone pool state (cross-process no-repeat phone numbers)
+phone_pool_state.json
+phone_pool_state.json.tmp
+phone_pool_state.lock
+
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/

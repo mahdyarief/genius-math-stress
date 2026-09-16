@@ -30,5 +30,9 @@ phone_pool_state.json
 phone_pool_state.json.tmp
 phone_pool_state.lock
 
+# Agent/plugin local state and stray shell output
+.omc/
+nohup.out
+
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/

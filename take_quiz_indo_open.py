@@ -355,8 +355,13 @@ def random_phone():
     try:
         n = 0
         if os.path.exists(_PHONE_STATE_FILE):
-            with open(_PHONE_STATE_FILE) as f:
-                n = json.load(f)["n"]
+            try:
+                with open(_PHONE_STATE_FILE) as f:
+                    n = json.load(f)["n"]
+            except (OSError, ValueError, KeyError, TypeError):
+                # State left by an older pool format (or a truncated file) is
+                # not a counter; start over rather than fail every run.
+                n = 0
         phone = _phone_from_index(n)
         tmp = _PHONE_STATE_FILE + ".tmp"
         with open(tmp, "w") as f:
